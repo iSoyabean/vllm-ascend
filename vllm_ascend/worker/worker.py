@@ -105,6 +105,9 @@ class NPUWorker(WorkerBase):
         if get_ascend_device_type() != AscendDeviceType.A5:
             _register_atb_extensions()
         register_ascend_customop(vllm_config)
+        from vllm_ascend.ops.catccos import load_catccos_library
+
+        load_catccos_library()
         # init ascend config and soc version
         init_ascend_config(vllm_config)
         check_ascend_device_type()
@@ -470,6 +473,10 @@ class NPUWorker(WorkerBase):
         with context, set_current_vllm_config(self.vllm_config):
             self.model_runner.load_model()
 
+        from vllm_ascend.ops.catccos import probe_catccos
+
+        probe_catccos(self.parallel_config.world_size)
+
     def compile_or_warm_up_model(self) -> CompilationTimes:
         # Note: need to adapt for graph mode.
         warmup_sizes = (self.vllm_config.compilation_config.compile_sizes or []).copy()
@@ -737,6 +744,9 @@ class NPUWorker(WorkerBase):
         )
         init_ascend_model_parallel(self.parallel_config)
         ensure_ec_transfer_initialized(self.vllm_config)
+        from vllm_ascend.ops.catccos import init_catccos_shmem
+
+        init_catccos_shmem(self.rank, self.parallel_config.world_size)
 
     def _create_profiler(self, trace_name: str):
         """Create torch_npu profiler with trace naming for unique files per worker (RFC #6954)."""

@@ -47,6 +47,10 @@ env_variables: dict[str, Callable[[], Any]] = {
     # The C compiler used for compiling the package. If not set, the default
     # value is None, which means the system default C compiler will be used.
     "C_COMPILER": lambda: os.getenv("C_COMPILER", None),
+    # Path to catccos libcatccos_torch.so. When set, vLLM-Ascend workers will
+    # load catccos and initialize SHMEM during startup. Leave unset to disable.
+    "VLLM_ASCEND_CATCCOS_OPS_SO":
+    lambda: os.getenv("VLLM_ASCEND_CATCCOS_OPS_SO", ""),
     # The version of the Ascend chip. It's used for package building.
     # If not set, we will query chip info through `npu-smi`.
     # Please make sure that the version is correct.
