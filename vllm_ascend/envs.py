@@ -47,6 +47,17 @@ env_variables: dict[str, Callable[[], Any]] = {
     # The C compiler used for compiling the package. If not set, the default
     # value is None, which means the system default C compiler will be used.
     "C_COMPILER": lambda: os.getenv("C_COMPILER", None),
+    # Whether to enable catccos external torch operators. When disabled,
+    # vLLM-Ascend will not load catccos or initialize SHMEM.
+    "VLLM_ASCEND_ENABLE_CATCCOS": lambda: bool(int(os.getenv("VLLM_ASCEND_ENABLE_CATCCOS", "0"))),
+    # Path to catccos libcatccos_torch.so. Required when
+    # VLLM_ASCEND_ENABLE_CATCCOS is enabled.
+    "VLLM_ASCEND_CATCCOS_OPS_SO": lambda: os.getenv("VLLM_ASCEND_CATCCOS_OPS_SO", ""),
+    # Whether to run a small catccos allgather_matmul smoke test after SHMEM
+    # initialization. Intended for debugging integration only.
+    "VLLM_ASCEND_CATCCOS_RUN_SMOKE_TEST": lambda: bool(
+        int(os.getenv("VLLM_ASCEND_CATCCOS_RUN_SMOKE_TEST", "0"))
+    ),
     # The version of the Ascend chip. It's used for package building.
     # If not set, we will query chip info through `npu-smi`.
     # Please make sure that the version is correct.
