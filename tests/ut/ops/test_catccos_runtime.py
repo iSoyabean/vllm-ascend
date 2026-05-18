@@ -1,11 +1,32 @@
 import importlib
-from types import SimpleNamespace
+import logging
+import sys
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 
+def _install_lightweight_imports(monkeypatch):
+    repo_root = Path(__file__).resolve().parents[3]
+    ops_module = ModuleType("vllm_ascend.ops")
+    ops_module.__path__ = [str(repo_root / "vllm_ascend" / "ops")]
+    catccos_module = ModuleType("vllm_ascend.ops.catccos")
+    catccos_module.__path__ = [str(repo_root / "vllm_ascend" / "ops" / "catccos")]
+    vllm_module = ModuleType("vllm")
+    logger_module = ModuleType("vllm.logger")
+    logger_module.init_logger = logging.getLogger
+
+    monkeypatch.setitem(sys.modules, "vllm_ascend.ops", ops_module)
+    monkeypatch.setitem(sys.modules, "vllm_ascend.ops.catccos", catccos_module)
+    monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+    monkeypatch.setitem(sys.modules, "vllm.logger", logger_module)
+    sys.modules.pop("vllm_ascend.ops.catccos.register", None)
+
+
 def _reload_runtime(monkeypatch, *, enabled=False, so_path="", smoke=False):
+    _install_lightweight_imports(monkeypatch)
     monkeypatch.setenv("VLLM_ASCEND_ENABLE_CATCCOS", "1" if enabled else "0")
     monkeypatch.setenv("VLLM_ASCEND_CATCCOS_OPS_SO", so_path)
     monkeypatch.setenv("VLLM_ASCEND_CATCCOS_RUN_SMOKE_TEST", "1" if smoke else "0")

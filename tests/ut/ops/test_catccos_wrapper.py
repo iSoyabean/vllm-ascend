@@ -1,11 +1,33 @@
 import importlib
-from types import SimpleNamespace
+import logging
+import sys
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 
+def _install_lightweight_imports(monkeypatch):
+    repo_root = Path(__file__).resolve().parents[3]
+    ops_module = ModuleType("vllm_ascend.ops")
+    ops_module.__path__ = [str(repo_root / "vllm_ascend" / "ops")]
+    catccos_module = ModuleType("vllm_ascend.ops.catccos")
+    catccos_module.__path__ = [str(repo_root / "vllm_ascend" / "ops" / "catccos")]
+    vllm_module = ModuleType("vllm")
+    logger_module = ModuleType("vllm.logger")
+    logger_module.init_logger = logging.getLogger
+
+    monkeypatch.setitem(sys.modules, "vllm_ascend.ops", ops_module)
+    monkeypatch.setitem(sys.modules, "vllm_ascend.ops.catccos", catccos_module)
+    monkeypatch.setitem(sys.modules, "vllm", vllm_module)
+    monkeypatch.setitem(sys.modules, "vllm.logger", logger_module)
+    sys.modules.pop("vllm_ascend.ops.catccos.register", None)
+    sys.modules.pop("vllm_ascend.ops.catccos.wrapper", None)
+
+
 def test_allgather_matmul_requires_initialized_runtime(monkeypatch):
+    _install_lightweight_imports(monkeypatch)
     wrapper = importlib.import_module("vllm_ascend.ops.catccos.wrapper")
     wrapper = importlib.reload(wrapper)
     monkeypatch.setattr(wrapper.runtime, "is_catccos_initialized", lambda: False)
@@ -15,6 +37,7 @@ def test_allgather_matmul_requires_initialized_runtime(monkeypatch):
 
 
 def test_allgather_matmul_delegates_to_torch_op(monkeypatch):
+    _install_lightweight_imports(monkeypatch)
     wrapper = importlib.import_module("vllm_ascend.ops.catccos.wrapper")
     wrapper = importlib.reload(wrapper)
     monkeypatch.setattr(wrapper.runtime, "is_catccos_initialized", lambda: True)
