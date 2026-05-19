@@ -4,6 +4,7 @@ import atexit
 import os
 
 import torch
+import torch.distributed as dist
 from vllm.logger import init_logger
 
 import vllm_ascend.envs as envs_ascend
@@ -29,6 +30,43 @@ def is_catccos_loaded() -> bool:
 def is_catccos_initialized() -> bool:
     return _shmem_initialized
 
+
+
+def _barrier_if_distributed() -> None:
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+
+
+def _materialize_smoke_tensor(shape: tuple[int, int]) -> torch.Tensor:
+    tensor = torch.empty(shape, dtype=torch.float16, device="npu")
+    tensor.fill_(1)
+    return tensor.contiguous()
+
+
+def _log_smoke_tensor(name: str, tensor: torch.Tensor) -> None:
+    try:
+        data_ptr = tensor.data_ptr()
+    except RuntimeError:
+        logger.exception(
+            "catccos smoke %s has no storage: shape=%s dtype=%s device=%s layout=%s is_meta=%s",
+            name,
+            tuple(tensor.shape),
+            tensor.dtype,
+            tensor.device,
+            tensor.layout,
+            getattr(tensor, "is_meta", False),
+        )
+        raise
+
+    logger.info(
+        "catccos smoke %s ready: shape=%s dtype=%s device=%s contiguous=%s data_ptr=%s",
+        name,
+        tuple(tensor.shape),
+        tensor.dtype,
+        tensor.device,
+        tensor.is_contiguous(),
+        data_ptr,
+    )
 
 def _get_shmem_ip_port() -> str:
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
@@ -79,6 +117,8 @@ def init_catccos_shmem(rank: int, world_size: int) -> None:
         atexit.register(finalize_catccos_shmem)
         _atexit_registered = True
 
+    _barrier_if_distributed()
+
     logger.info(
         "catccos SHMEM init ok: rank=%s world_size=%s ip_port=%s",
         rank,
@@ -108,11 +148,22 @@ def run_catccos_smoke_test(world_size: int) -> None:
     if not envs_ascend.VLLM_ASCEND_CATCCOS_RUN_SMOKE_TEST or not _shmem_initialized:
         return
 
+    _barrier_if_distributed()
+
     m, k, n = 128, 256, 128
-    a = torch.ones((m, k), dtype=torch.float16, device="npu")
-    b = torch.ones((k, n), dtype=torch.float16, device="npu")
+    a = _materialize_smoke_tensor((m, k))
+    b = _materialize_smoke_tensor((k, n))
+    if dist.is_available() and dist.is_initialized():
+        dist.broadcast(b, src=0)
+    torch.npu.synchronize()
+
+    _log_smoke_tensor("a", a)
+    _log_smoke_tensor("b", b)
+    _barrier_if_distributed()
+
     out = torch.ops.catccos.allgather_matmul(a, b, world_size)
     torch.npu.synchronize()
+    _barrier_if_distributed()
 
     expected_shape = (m * world_size, n)
     if tuple(out.shape) != expected_shape:
