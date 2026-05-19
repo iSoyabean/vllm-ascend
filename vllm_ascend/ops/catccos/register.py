@@ -31,7 +31,6 @@ def is_catccos_initialized() -> bool:
     return _shmem_initialized
 
 
-
 def _barrier_if_distributed() -> None:
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
@@ -43,9 +42,9 @@ def _materialize_smoke_tensor(shape: tuple[int, int]) -> torch.Tensor:
     return tensor.contiguous()
 
 
-def _log_smoke_tensor(name: str, tensor: torch.Tensor) -> None:
+def _check_smoke_tensor_storage(name: str, tensor: torch.Tensor) -> None:
     try:
-        data_ptr = tensor.data_ptr()
+        tensor.data_ptr()
     except RuntimeError:
         logger.exception(
             "catccos smoke %s has no storage: shape=%s dtype=%s device=%s layout=%s is_meta=%s",
@@ -57,16 +56,6 @@ def _log_smoke_tensor(name: str, tensor: torch.Tensor) -> None:
             getattr(tensor, "is_meta", False),
         )
         raise
-
-    logger.info(
-        "catccos smoke %s ready: shape=%s dtype=%s device=%s contiguous=%s data_ptr=%s",
-        name,
-        tuple(tensor.shape),
-        tensor.dtype,
-        tensor.device,
-        tensor.is_contiguous(),
-        data_ptr,
-    )
 
 def _get_shmem_ip_port() -> str:
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
@@ -157,8 +146,8 @@ def run_catccos_smoke_test(world_size: int) -> None:
         dist.broadcast(b, src=0)
     torch.npu.synchronize()
 
-    _log_smoke_tensor("a", a)
-    _log_smoke_tensor("b", b)
+    _check_smoke_tensor_storage("a", a)
+    _check_smoke_tensor_storage("b", b)
     _barrier_if_distributed()
 
     out = torch.ops.catccos.allgather_matmul(a, b, world_size)
