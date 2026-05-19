@@ -826,6 +826,22 @@ def mlp_tp_enable() -> bool:
     return get_ascend_config().finegrained_tp_config.mlp_tensor_parallel_size > 0
 
 
+def catccos_allgather_matmul_enable() -> bool:
+    return bool(
+        envs_ascend.VLLM_ASCEND_ENABLE_CATCCOS
+        and envs_ascend.VLLM_ASCEND_ENABLE_CATCCOS_ALLGATHER_MATMUL
+    )
+
+
+def catccos_allgather_matmul_prefix_enabled(prefix: str) -> bool:
+    raw_prefixes = envs_ascend.VLLM_ASCEND_CATCCOS_ALLGATHER_MATMUL_PREFIXES
+    if not raw_prefixes:
+        return False
+
+    prefixes = [item.strip() for item in raw_prefixes.split(",") if item.strip()]
+    return any(item == "*" or item in prefix for item in prefixes)
+
+
 def matmul_allreduce_enable() -> bool:
     return envs_ascend.VLLM_ASCEND_ENABLE_MATMUL_ALLREDUCE
 

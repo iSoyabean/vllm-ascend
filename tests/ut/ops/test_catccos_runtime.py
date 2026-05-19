@@ -17,6 +17,7 @@ def _install_lightweight_imports(monkeypatch):
     vllm_module = ModuleType("vllm")
     logger_module = ModuleType("vllm.logger")
     logger_module.init_logger = logging.getLogger
+    logger_module.logger = logging.getLogger("vllm")
 
     monkeypatch.setitem(sys.modules, "vllm_ascend.ops", ops_module)
     monkeypatch.setitem(sys.modules, "vllm_ascend.ops.catccos", catccos_module)

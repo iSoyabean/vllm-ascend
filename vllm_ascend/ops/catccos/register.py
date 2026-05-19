@@ -5,11 +5,9 @@ import os
 
 import torch
 import torch.distributed as dist
-from vllm.logger import init_logger
+from vllm.logger import logger
 
 import vllm_ascend.envs as envs_ascend
-
-logger = init_logger(__name__)
 
 _DEFAULT_SHMEM_PORT = 28735
 _DEFAULT_SHMEM_LOCAL_MEM_SIZE = 1024**3

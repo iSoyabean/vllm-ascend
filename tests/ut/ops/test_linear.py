@@ -14,6 +14,7 @@ from vllm_ascend.ops.linear import (
     AscendRowParallelLinear,
     AscendUnquantizedLinearMethod,
 )
+from vllm_ascend.ops.linear_op import CatccosMLPColumnParallelOp, MLPColumnParallelOp
 
 
 class BaseLinearTest(unittest.TestCase):
@@ -135,6 +136,98 @@ class TestAscendMergedColumnParallelLinear(BaseLinearTest):
             prefix="gate_up_proj",
         )
         self.assertEqual(linear.custom_op.comm_group, parallel_state._MLP_TP)
+
+
+class TestCatccosMLPColumnParallelOp(BaseLinearTest):
+    def _prepare_config(self):
+        ascend_config._ASCEND_CONFIG = MagicMock()
+        ascend_config._ASCEND_CONFIG.recompute_scheduler_enable = False
+        ascend_config._ASCEND_CONFIG.finegrained_tp_config.mlp_tensor_parallel_size = 2
+        ascend_config._ASCEND_CONFIG.ascend_scheduler_config.enabled = False
+
+    @patch("vllm_ascend.ops.linear_op.catccos_allgather_matmul_prefix_enabled", return_value=True)
+    @patch("vllm_ascend.ops.linear_op.catccos_allgather_matmul_enable", return_value=True)
+    def test_catccos_mlp_column_parallel_selected(self, mock_enable, mock_prefix_enabled):
+        self._prepare_config()
+
+        linear = AscendMergedColumnParallelLinear(
+            input_size=16,
+            output_sizes=[8, 8],
+            prefix="model.layers.0.mlp.gate_up_proj",
+        )
+
+        self.assertIsInstance(linear.custom_op, CatccosMLPColumnParallelOp)
+
+    @patch("vllm_ascend.ops.linear_op.catccos_allgather_matmul_prefix_enabled", return_value=False)
+    @patch("vllm_ascend.ops.linear_op.catccos_allgather_matmul_enable", return_value=True)
+    def test_catccos_mlp_column_parallel_requires_prefix_match(self, mock_enable, mock_prefix_enabled):
+        self._prepare_config()
+
+        linear = AscendMergedColumnParallelLinear(
+            input_size=16,
+            output_sizes=[8, 8],
+            prefix="model.layers.0.mlp.gate_up_proj",
+        )
+
+        self.assertIsInstance(linear.custom_op, MLPColumnParallelOp)
+        self.assertNotIsInstance(linear.custom_op, CatccosMLPColumnParallelOp)
+
+    @patch("vllm_ascend.ops.catccos.allgather_matmul")
+    @patch("vllm_ascend.ops.linear_op.catccos_allgather_matmul_prefix_enabled", return_value=True)
+    @patch("vllm_ascend.ops.linear_op.catccos_allgather_matmul_enable", return_value=True)
+    def test_catccos_mlp_column_parallel_apply(self, mock_enable, mock_prefix_enabled, mock_allgather_matmul):
+        self._prepare_config()
+        linear = AscendMergedColumnParallelLinear(
+            input_size=16,
+            output_sizes=[8, 8],
+            prefix="model.layers.0.mlp.gate_up_proj",
+        )
+        fake_output = torch.randn(8, 16)
+        mock_allgather_matmul.return_value = fake_output
+
+        input_tensor = torch.randn(4, 16)
+        output = linear(input_tensor)
+
+        self.assertIs(output, fake_output)
+        mock_allgather_matmul.assert_called_once()
+        call_args = mock_allgather_matmul.call_args.args
+        self.assertEqual(call_args[0].shape, input_tensor.shape)
+        self.assertEqual(call_args[1].shape, (16, 16))
+        self.assertEqual(call_args[2], 2)
+
+
+    @patch("vllm_ascend.ops.catccos.allgather_matmul")
+    @patch("vllm_ascend.ops.linear_op.catccos_allgather_matmul_prefix_enabled", return_value=True)
+    @patch("vllm_ascend.ops.linear_op.catccos_allgather_matmul_enable", return_value=True)
+    def test_catccos_mlp_column_parallel_falls_back_for_unsupported_quant_method(
+        self, mock_enable, mock_prefix_enabled, mock_allgather_matmul
+    ):
+        self._prepare_config()
+        linear = AscendMergedColumnParallelLinear(
+            input_size=16,
+            output_sizes=[8, 8],
+            bias=False,
+            prefix="model.layers.0.mlp.gate_up_proj",
+        )
+        fake_output = torch.randn(4, 16)
+        input_tensor = torch.randn(4, 16)
+        gathered_input = torch.randn(8, 16)
+
+        class UnsupportedQuantMethod:
+            def __init__(self):
+                self.apply = MagicMock(return_value=fake_output)
+
+        fake_quant_method = UnsupportedQuantMethod()
+        linear.quant_method = fake_quant_method
+        linear.custom_op.update_attrs()
+        self.mock_group.all_gather.return_value = gathered_input
+
+        output = linear(input_tensor)
+
+        self.assertIs(output, fake_output)
+        mock_allgather_matmul.assert_not_called()
+        self.mock_group.all_gather.assert_called_once_with(input_tensor, 0)
+        fake_quant_method.apply.assert_called_once_with(linear, gathered_input, None)
 
 
 class TestAscendReplicatedLinear(BaseLinearTest):

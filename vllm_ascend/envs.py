@@ -58,6 +58,17 @@ env_variables: dict[str, Callable[[], Any]] = {
     "VLLM_ASCEND_CATCCOS_RUN_SMOKE_TEST": lambda: bool(
         int(os.getenv("VLLM_ASCEND_CATCCOS_RUN_SMOKE_TEST", "0"))
     ),
+    # Whether to allow manually selected model forward paths to use catccos
+    # allgather_matmul. This is separate from runtime enablement so Phase 1
+    # smoke tests can run without replacing model layers.
+    "VLLM_ASCEND_ENABLE_CATCCOS_ALLGATHER_MATMUL": lambda: bool(
+        int(os.getenv("VLLM_ASCEND_ENABLE_CATCCOS_ALLGATHER_MATMUL", "0"))
+    ),
+    # Comma-separated layer prefix substrings that are allowed to use catccos
+    # allgather_matmul in model forward. Empty means replace no model layers.
+    "VLLM_ASCEND_CATCCOS_ALLGATHER_MATMUL_PREFIXES": lambda: os.getenv(
+        "VLLM_ASCEND_CATCCOS_ALLGATHER_MATMUL_PREFIXES", ""
+    ),
     # The version of the Ascend chip. It's used for package building.
     # If not set, we will query chip info through `npu-smi`.
     # Please make sure that the version is correct.

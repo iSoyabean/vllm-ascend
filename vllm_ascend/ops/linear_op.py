@@ -20,6 +20,7 @@ Current class inheritance structure:
 CustomLinearOp
 ├── CustomColumnParallelOp
 │   ├── MLPColumnParallelOp
+│   ├── CatccosMLPColumnParallelOp
 │   ├── SequenceColumnParallelOp
 │   ├── Flashcomm2OshardQKVParallelOp
 └── CustomRowParallelOp
@@ -69,6 +70,8 @@ from vllm_ascend.distributed.parallel_state import (
 )
 from vllm_ascend.ops.flashcomm2_oshard_manager import flashcomm2_oshard_manager
 from vllm_ascend.utils import (
+    catccos_allgather_matmul_enable,
+    catccos_allgather_matmul_prefix_enabled,
     enable_dsa_cp,
     enable_dsa_cp_with_layer_shard,
     enable_sp,
@@ -195,6 +198,35 @@ class MLPColumnParallelOp(CustomColumnParallelOp):
         assert self.quant_method is not None
         input_parallel = self.comm_group.all_gather(input_, 0)
         output = self.quant_method.apply(self.layer, input_parallel, bias)
+
+        output_bias = self.bias if self.skip_bias_add else None
+        return output, output_bias
+
+
+class CatccosMLPColumnParallelOp(MLPColumnParallelOp):
+    _SUPPORTED_QUANT_METHODS = {"AscendUnquantizedLinearMethod", "UnquantizedLinearMethod"}
+
+    def _is_supported_quant_method(self) -> bool:
+        actual_quant_method = getattr(self.quant_method, "quant_method", self.quant_method)
+        method_name = actual_quant_method.__class__.__name__
+        return method_name in self._SUPPORTED_QUANT_METHODS
+
+    def apply_impl(
+        self,
+        input_: torch.Tensor,
+    ) -> torch.Tensor | tuple[torch.Tensor, Parameter | None]:
+        assert self.quant_method is not None
+        if not self._is_supported_quant_method():
+            return super().apply_impl(input_)
+
+        from vllm_ascend.ops.catccos import allgather_matmul
+
+        bias = self.bias if not self.skip_bias_add else None
+        output = allgather_matmul(
+            input_.contiguous(), self.layer.weight.t().contiguous(), self.tp_size
+        )
+        if bias is not None:
+            output = output + bias
 
         output_bias = self.bias if self.skip_bias_add else None
         return output, output_bias
@@ -626,9 +658,24 @@ class ShardedCPColumnParallelOp(CustomColumnParallelOp):
 
 def _get_column_parallel_op(
     prefix, layer
-) -> MLPColumnParallelOp | SequenceColumnParallelOp | ShardedCPColumnParallelOp | Flashcomm2OshardQKVParallelOp | None:
+) -> (
+    MLPColumnParallelOp
+    | CatccosMLPColumnParallelOp
+    | SequenceColumnParallelOp
+    | ShardedCPColumnParallelOp
+    | Flashcomm2OshardQKVParallelOp
+    | None
+):
     if enable_dsa_cp() and ("q_b_proj" in prefix or "kv_b_proj" in prefix):
         return ShardedCPColumnParallelOp(layer)
+    if (
+        "gate_up_proj" in prefix
+        and mlp_tp_enable()
+        and not is_moe_layer(prefix)
+        and catccos_allgather_matmul_enable()
+        and catccos_allgather_matmul_prefix_enabled(prefix)
+    ):
+        return CatccosMLPColumnParallelOp(layer)
     if "gate_up_proj" in prefix and mlp_tp_enable() and not is_moe_layer(prefix):
         return MLPColumnParallelOp(layer)
     if flashcomm2_oshard_manager.flashcomm2_oshard_enable():
@@ -698,6 +745,7 @@ def get_parallel_op(disable_tp, prefix, layer, direct):
         return None, 0, 1
     custom_op: (
         MLPColumnParallelOp
+        | CatccosMLPColumnParallelOp
         | SequenceColumnParallelOp
         | MLPRowParallelOp
         | OProjRowParallelOp
