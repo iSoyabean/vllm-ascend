@@ -121,11 +121,6 @@ def run_dp_rank(
     dp_master_ip: str,
     dp_master_port: int,
 ) -> None:
-    os.environ["VLLM_DP_RANK"] = str(global_dp_rank)
-    os.environ["VLLM_DP_RANK_LOCAL"] = str(local_dp_rank)
-    os.environ["VLLM_DP_SIZE"] = str(args.dp_size)
-    os.environ["VLLM_DP_MASTER_IP"] = dp_master_ip
-    os.environ["VLLM_DP_MASTER_PORT"] = str(dp_master_port)
     os.environ.setdefault("MASTER_ADDR", dp_master_ip)
     os.environ.setdefault("MASTER_PORT", str(dp_master_port))
 
@@ -146,6 +141,11 @@ def run_dp_rank(
     llm = LLM(
         model=args.model,
         tensor_parallel_size=args.tp_size,
+        data_parallel_size=args.dp_size,
+        data_parallel_rank=global_dp_rank,
+        data_parallel_rank_local=local_dp_rank,
+        data_parallel_master_ip=dp_master_ip,
+        data_parallel_master_port=dp_master_port,
         dtype=args.dtype,
         max_model_len=args.max_model_len,
         gpu_memory_utilization=args.gpu_memory_utilization,
