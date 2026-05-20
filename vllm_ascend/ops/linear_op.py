@@ -720,22 +720,34 @@ def _get_column_parallel_op(
 ):
     if enable_dsa_cp() and ("q_b_proj" in prefix or "kv_b_proj" in prefix):
         return ShardedCPColumnParallelOp(layer)
-    if "gate_up_proj" in prefix and mlp_tp_enable() and not is_moe_layer(prefix):
+    if "gate_up_proj" in prefix:
+        mlp_tp = mlp_tp_enable()
+        is_moe = is_moe_layer(prefix)
         catccos_enabled = catccos_allgather_matmul_enable()
         prefix_enabled = catccos_allgather_matmul_prefix_enabled(prefix) if catccos_enabled else False
-        if catccos_enabled and prefix_enabled:
-            _log_catccos_selection_once(
-                "catccos allgather_matmul custom op selected: prefix=%s",
-                prefix,
-            )
-            return CatccosMLPColumnParallelOp(layer)
         _log_catccos_selection_once(
-            "catccos allgather_matmul custom op not selected: prefix=%s enabled=%s prefix_enabled=%s",
+            "catccos gate_up candidate: prefix=%s mlp_tp_enable=%s is_moe_layer=%s "
+            "catccos_enabled=%s prefix_enabled=%s",
             prefix,
+            mlp_tp,
+            is_moe,
             catccos_enabled,
             prefix_enabled,
         )
-        return MLPColumnParallelOp(layer)
+        if mlp_tp and not is_moe:
+            if catccos_enabled and prefix_enabled:
+                _log_catccos_selection_once(
+                    "catccos allgather_matmul custom op selected: prefix=%s",
+                    prefix,
+                )
+                return CatccosMLPColumnParallelOp(layer)
+            _log_catccos_selection_once(
+                "catccos allgather_matmul custom op not selected: prefix=%s enabled=%s prefix_enabled=%s",
+                prefix,
+                catccos_enabled,
+                prefix_enabled,
+            )
+            return MLPColumnParallelOp(layer)
     if flashcomm2_oshard_manager.flashcomm2_oshard_enable():
         if any(p in prefix for p in ("qkv_proj", "conv1d", "query_key_value")):
             return Flashcomm2OshardQKVParallelOp(layer)
