@@ -58,6 +58,7 @@ from vllm.distributed import (
     tensor_model_parallel_reduce_scatter,
 )
 from vllm.distributed.parallel_state import get_tp_group
+from vllm.logger import logger
 from vllm.model_executor.models.utils import extract_layer_index
 
 from vllm_ascend.ascend_config import get_ascend_config
@@ -84,6 +85,27 @@ from vllm_ascend.utils import (
     oproj_tp_enable,
     shared_expert_dp_enabled,
 )
+
+_CATCCOS_LINEAR_SELECTION_LOG_LIMIT = 32
+_CATCCOS_LINEAR_FORWARD_LOG_LIMIT = 32
+_catccos_linear_selection_log_count = 0
+_catccos_linear_forward_log_count = 0
+
+
+def _log_catccos_selection_once(message: str, *args) -> None:
+    global _catccos_linear_selection_log_count
+    if _catccos_linear_selection_log_count >= _CATCCOS_LINEAR_SELECTION_LOG_LIMIT:
+        return
+    _catccos_linear_selection_log_count += 1
+    logger.info(message, *args)
+
+
+def _log_catccos_forward_once(message: str, *args) -> None:
+    global _catccos_linear_forward_log_count
+    if _catccos_linear_forward_log_count >= _CATCCOS_LINEAR_FORWARD_LOG_LIMIT:
+        return
+    _catccos_linear_forward_log_count += 1
+    logger.info(message, *args)
 
 
 class CustomLinearOp:
@@ -206,25 +228,45 @@ class MLPColumnParallelOp(CustomColumnParallelOp):
 class CatccosMLPColumnParallelOp(MLPColumnParallelOp):
     _SUPPORTED_QUANT_METHODS = {"AscendUnquantizedLinearMethod", "UnquantizedLinearMethod"}
 
-    def _is_supported_quant_method(self) -> bool:
+    def _quant_method_name(self) -> str:
         actual_quant_method = getattr(self.quant_method, "quant_method", self.quant_method)
-        method_name = actual_quant_method.__class__.__name__
-        return method_name in self._SUPPORTED_QUANT_METHODS
+        return actual_quant_method.__class__.__name__
+
+    def _is_supported_quant_method(self) -> bool:
+        return self._quant_method_name() in self._SUPPORTED_QUANT_METHODS
 
     def apply_impl(
         self,
         input_: torch.Tensor,
     ) -> torch.Tensor | tuple[torch.Tensor, Parameter | None]:
         assert self.quant_method is not None
+        quant_method_name = self._quant_method_name()
         if not self._is_supported_quant_method():
+            _log_catccos_forward_once(
+                "catccos allgather_matmul fallback: prefix=%s quant_method=%s input_shape=%s",
+                self.prefix,
+                quant_method_name,
+                tuple(input_.shape),
+            )
             return super().apply_impl(input_)
 
         from vllm_ascend.ops.catccos import allgather_matmul
 
+        input_contiguous = input_.contiguous()
+        weight_contiguous = self.layer.weight.t().contiguous()
         bias = self.bias if not self.skip_bias_add else None
-        output = allgather_matmul(
-            input_.contiguous(), self.layer.weight.t().contiguous(), self.tp_size
+        _log_catccos_forward_once(
+            "catccos allgather_matmul selected: prefix=%s quant_method=%s input_shape=%s "
+            "weight_shape=%s tp_size=%s bias=%s skip_bias_add=%s",
+            self.prefix,
+            quant_method_name,
+            tuple(input_contiguous.shape),
+            tuple(weight_contiguous.shape),
+            self.tp_size,
+            bias is not None,
+            self.skip_bias_add,
         )
+        output = allgather_matmul(input_contiguous, weight_contiguous, self.tp_size)
         if bias is not None:
             output = output + bias
 
@@ -668,15 +710,21 @@ def _get_column_parallel_op(
 ):
     if enable_dsa_cp() and ("q_b_proj" in prefix or "kv_b_proj" in prefix):
         return ShardedCPColumnParallelOp(layer)
-    if (
-        "gate_up_proj" in prefix
-        and mlp_tp_enable()
-        and not is_moe_layer(prefix)
-        and catccos_allgather_matmul_enable()
-        and catccos_allgather_matmul_prefix_enabled(prefix)
-    ):
-        return CatccosMLPColumnParallelOp(layer)
     if "gate_up_proj" in prefix and mlp_tp_enable() and not is_moe_layer(prefix):
+        catccos_enabled = catccos_allgather_matmul_enable()
+        prefix_enabled = catccos_allgather_matmul_prefix_enabled(prefix) if catccos_enabled else False
+        if catccos_enabled and prefix_enabled:
+            _log_catccos_selection_once(
+                "catccos allgather_matmul custom op selected: prefix=%s",
+                prefix,
+            )
+            return CatccosMLPColumnParallelOp(layer)
+        _log_catccos_selection_once(
+            "catccos allgather_matmul custom op not selected: prefix=%s enabled=%s prefix_enabled=%s",
+            prefix,
+            catccos_enabled,
+            prefix_enabled,
+        )
         return MLPColumnParallelOp(layer)
     if flashcomm2_oshard_manager.flashcomm2_oshard_enable():
         if any(p in prefix for p in ("qkv_proj", "conv1d", "query_key_value")):

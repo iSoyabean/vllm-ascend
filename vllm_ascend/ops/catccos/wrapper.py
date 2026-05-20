@@ -1,8 +1,20 @@
 """Public Python wrappers for catccos torch operators."""
 
 import torch
+from vllm.logger import logger
 
 from vllm_ascend.ops.catccos import register as runtime
+
+_CATCCOS_WRAPPER_LOG_LIMIT = 16
+_catccos_wrapper_log_count = 0
+
+
+def _log_catccos_wrapper_once(message: str, *args) -> None:
+    global _catccos_wrapper_log_count
+    if _catccos_wrapper_log_count >= _CATCCOS_WRAPPER_LOG_LIMIT:
+        return
+    _catccos_wrapper_log_count += 1
+    logger.info(message, *args)
 
 
 def _device_type(tensor: torch.Tensor) -> str | None:
@@ -11,6 +23,11 @@ def _device_type(tensor: torch.Tensor) -> str | None:
 
 def _shape(tensor: torch.Tensor) -> tuple[int, ...]:
     return tuple(tensor.shape)
+
+
+def _shape_or_none(tensor: object) -> tuple[int, ...] | None:
+    shape = getattr(tensor, "shape", None)
+    return tuple(shape) if shape is not None else None
 
 
 def _validate_allgather_matmul_inputs(a: torch.Tensor, b: torch.Tensor, world_size: int) -> None:
@@ -56,4 +73,22 @@ def _validate_allgather_matmul_inputs(a: torch.Tensor, b: torch.Tensor, world_si
 
 def allgather_matmul(a: torch.Tensor, b: torch.Tensor, world_size: int) -> torch.Tensor:
     _validate_allgather_matmul_inputs(a, b, world_size)
-    return torch.ops.catccos.allgather_matmul(a, b, world_size)
+    _log_catccos_wrapper_once(
+        "catccos torch op call: a_shape=%s b_shape=%s a_dtype=%s b_dtype=%s "
+        "a_device=%s b_device=%s world_size=%s",
+        _shape(a),
+        _shape(b),
+        a.dtype,
+        b.dtype,
+        a.device,
+        b.device,
+        world_size,
+    )
+    output = torch.ops.catccos.allgather_matmul(a, b, world_size)
+    _log_catccos_wrapper_once(
+        "catccos torch op returned: output_shape=%s output_dtype=%s output_device=%s",
+        _shape_or_none(output),
+        getattr(output, "dtype", None),
+        getattr(output, "device", None),
+    )
+    return output
