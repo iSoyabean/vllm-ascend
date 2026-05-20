@@ -529,6 +529,60 @@ class SequenceColumnParallelOp(CustomColumnParallelOp):
         return output, output_bias
 
 
+class CatccosSequenceColumnParallelOp(SequenceColumnParallelOp):
+    _SUPPORTED_QUANT_METHODS = {"AscendUnquantizedLinearMethod", "UnquantizedLinearMethod"}
+
+    def _quant_method_name(self) -> str:
+        actual_quant_method = getattr(self.quant_method, "quant_method", self.quant_method)
+        return actual_quant_method.__class__.__name__
+
+    def _is_supported_quant_method(self) -> bool:
+        return self._quant_method_name() in self._SUPPORTED_QUANT_METHODS
+
+    def apply_impl(self, input_: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, Parameter | None]:
+        assert self.quant_method is not None
+        quant_method_name = self._quant_method_name()
+        if not self._is_supported_quant_method():
+            _log_catccos_forward_once(
+                "catccos sequence allgather_matmul fallback: prefix=%s quant_method=%s input_shape=%s",
+                self.prefix,
+                quant_method_name,
+                tuple(input_.shape),
+            )
+            return super().apply_impl(input_)
+
+        need_all_gather = not (extract_layer_index(self.layer.prefix) == 0 and is_vl_model() and "attn" in self.prefix)
+        if not need_all_gather:
+            return super().apply_impl(input_)
+
+        from vllm_ascend.ops.catccos import allgather_matmul
+
+        input_contiguous = input_.contiguous()
+        weight_contiguous = self.layer.weight.t().contiguous()
+        bias = self.bias if not self.skip_bias_add else None
+        _log_catccos_forward_once(
+            "catccos sequence allgather_matmul selected: prefix=%s quant_method=%s input_shape=%s "
+            "weight_shape=%s tp_size=%s bias=%s skip_bias_add=%s",
+            self.prefix,
+            quant_method_name,
+            tuple(input_contiguous.shape),
+            tuple(weight_contiguous.shape),
+            self.tp_size,
+            bias is not None,
+            self.skip_bias_add,
+        )
+        output_parallel = allgather_matmul(input_contiguous, weight_contiguous, self.tp_size)
+        if bias is not None:
+            output_parallel = output_parallel + bias
+
+        if self.gather_output:
+            output = self.comm_group.all_gather(output_parallel)
+        else:
+            output = output_parallel
+        output_bias = self.bias if self.skip_bias_add else None
+        return output, output_bias
+
+
 class Flashcomm2OshardQKVParallelOp(CustomColumnParallelOp):
     def __init__(self, layer):
         super().__init__(layer)
@@ -763,6 +817,16 @@ def _get_column_parallel_op(
         ]
         for a_prefix in sp_column_prefix:
             if a_prefix in prefix:
+                if (
+                    a_prefix == "gate_up_proj"
+                    and catccos_allgather_matmul_enable()
+                    and catccos_allgather_matmul_prefix_enabled(prefix)
+                ):
+                    _log_catccos_selection_once(
+                        "catccos sequence allgather_matmul custom op selected: prefix=%s",
+                        prefix,
+                    )
+                    return CatccosSequenceColumnParallelOp(layer)
                 return SequenceColumnParallelOp(layer)
 
     return None
