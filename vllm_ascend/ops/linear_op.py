@@ -86,10 +86,20 @@ from vllm_ascend.utils import (
     shared_expert_dp_enabled,
 )
 
+_CATCCOS_LINEAR_PREFIX_SCAN_LOG_LIMIT = 128
 _CATCCOS_LINEAR_SELECTION_LOG_LIMIT = 32
 _CATCCOS_LINEAR_FORWARD_LOG_LIMIT = 32
+_catccos_linear_prefix_scan_log_count = 0
 _catccos_linear_selection_log_count = 0
 _catccos_linear_forward_log_count = 0
+
+
+def _log_catccos_prefix_scan_once(message: str, *args) -> None:
+    global _catccos_linear_prefix_scan_log_count
+    if _catccos_linear_prefix_scan_log_count >= _CATCCOS_LINEAR_PREFIX_SCAN_LOG_LIMIT:
+        return
+    _catccos_linear_prefix_scan_log_count += 1
+    logger.info(message, *args)
 
 
 def _log_catccos_selection_once(message: str, *args) -> None:
@@ -785,6 +795,14 @@ def _get_row_parallel_op(
 
 
 def get_parallel_op(disable_tp, prefix, layer, direct):
+    if catccos_allgather_matmul_enable():
+        _log_catccos_prefix_scan_once(
+            "catccos prefix scan: direct=%s prefix=%s layer=%s disable_tp=%s",
+            direct,
+            prefix,
+            layer.__class__.__name__,
+            disable_tp,
+        )
     if (
         disable_tp
         or ("shared_experts" in prefix and shared_expert_dp_enabled())
