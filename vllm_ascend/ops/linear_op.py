@@ -248,12 +248,6 @@ class CatccosMLPColumnParallelOp(MLPColumnParallelOp):
         assert self.quant_method is not None
         quant_method_name = self._quant_method_name()
         if not self._is_supported_quant_method():
-            _log_catccos_forward_once(
-                "catccos allgather_matmul fallback: prefix=%s quant_method=%s input_shape=%s",
-                self.prefix,
-                quant_method_name,
-                tuple(input_.shape),
-            )
             return super().apply_impl(input_)
 
         from vllm_ascend.ops.catccos import allgather_matmul
@@ -261,17 +255,6 @@ class CatccosMLPColumnParallelOp(MLPColumnParallelOp):
         input_contiguous = input_.contiguous()
         weight_contiguous = self.layer.weight.t().contiguous()
         bias = self.bias if not self.skip_bias_add else None
-        _log_catccos_forward_once(
-            "catccos allgather_matmul selected: prefix=%s quant_method=%s input_shape=%s "
-            "weight_shape=%s tp_size=%s bias=%s skip_bias_add=%s",
-            self.prefix,
-            quant_method_name,
-            tuple(input_contiguous.shape),
-            tuple(weight_contiguous.shape),
-            self.tp_size,
-            bias is not None,
-            self.skip_bias_add,
-        )
         output = allgather_matmul(input_contiguous, weight_contiguous, self.tp_size)
         if bias is not None:
             output = output + bias
@@ -513,7 +496,6 @@ class SequenceColumnParallelOp(CustomColumnParallelOp):
         # Matrix multiply.
         assert self.quant_method is not None
         need_all_gather = not (extract_layer_index(self.layer.prefix) == 0 and is_vl_model() and "attn" in self.prefix)
-        input_shape_before_gather = tuple(input_.shape)
         input_ = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(input_, label=need_all_gather)
         output_parallel = self.quant_method.apply(self.layer, input_, bias)
 
@@ -522,17 +504,6 @@ class SequenceColumnParallelOp(CustomColumnParallelOp):
             output = self.comm_group.all_gather(output_parallel)
         else:
             output = output_parallel
-        _log_catccos_forward_once(
-            "sequence column original: prefix=%s need_all_gather=%s input_shape=%s after_gather_shape=%s "
-            "output_parallel_shape=%s gather_output=%s output_shape=%s",
-            self.prefix,
-            need_all_gather,
-            input_shape_before_gather,
-            tuple(input_.shape),
-            tuple(output_parallel.shape),
-            self.gather_output,
-            tuple(output.shape),
-        )
         output_bias = self.bias if self.skip_bias_add else None
         return output, output_bias
 
@@ -551,32 +522,14 @@ class CatccosSequenceColumnParallelOp(SequenceColumnParallelOp):
         assert self.quant_method is not None
         quant_method_name = self._quant_method_name()
         if not self._is_supported_quant_method():
-            _log_catccos_forward_once(
-                "catccos sequence allgather_matmul fallback: prefix=%s quant_method=%s input_shape=%s",
-                self.prefix,
-                quant_method_name,
-                tuple(input_.shape),
-            )
             return super().apply_impl(input_)
 
         need_all_gather = not (extract_layer_index(self.layer.prefix) == 0 and is_vl_model() and "attn" in self.prefix)
         if not need_all_gather:
             return super().apply_impl(input_)
         if not _EXTRA_CTX.flash_comm_v1_enabled:
-            _log_catccos_forward_once(
-                "catccos sequence allgather_matmul fallback: prefix=%s flash_comm_v1_enabled=%s input_shape=%s",
-                self.prefix,
-                _EXTRA_CTX.flash_comm_v1_enabled,
-                tuple(input_.shape),
-            )
             return super().apply_impl(input_)
         if _EXTRA_CTX.pad_size != 0:
-            _log_catccos_forward_once(
-                "catccos sequence allgather_matmul fallback: prefix=%s pad_size=%s input_shape=%s",
-                self.prefix,
-                _EXTRA_CTX.pad_size,
-                tuple(input_.shape),
-            )
             return super().apply_impl(input_)
 
         from vllm_ascend.ops.catccos import allgather_matmul
@@ -584,17 +537,6 @@ class CatccosSequenceColumnParallelOp(SequenceColumnParallelOp):
         input_contiguous = input_.contiguous()
         weight_contiguous = self.layer.weight.t().contiguous()
         bias = self.bias if not self.skip_bias_add else None
-        _log_catccos_forward_once(
-            "catccos sequence allgather_matmul selected: prefix=%s quant_method=%s input_shape=%s "
-            "weight_shape=%s tp_size=%s bias=%s skip_bias_add=%s",
-            self.prefix,
-            quant_method_name,
-            tuple(input_contiguous.shape),
-            tuple(weight_contiguous.shape),
-            self.tp_size,
-            bias is not None,
-            self.skip_bias_add,
-        )
         output_parallel = allgather_matmul(input_contiguous, weight_contiguous, self.tp_size)
         if bias is not None:
             output_parallel = output_parallel + bias
@@ -603,15 +545,6 @@ class CatccosSequenceColumnParallelOp(SequenceColumnParallelOp):
             output = self.comm_group.all_gather(output_parallel)
         else:
             output = output_parallel
-        _log_catccos_forward_once(
-            "catccos sequence allgather_matmul output: prefix=%s input_shape=%s output_parallel_shape=%s "
-            "gather_output=%s output_shape=%s",
-            self.prefix,
-            tuple(input_contiguous.shape),
-            tuple(output_parallel.shape),
-            self.gather_output,
-            tuple(output.shape),
-        )
         output_bias = self.bias if self.skip_bias_add else None
         return output, output_bias
 

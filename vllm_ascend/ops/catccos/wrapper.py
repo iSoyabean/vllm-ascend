@@ -68,22 +68,5 @@ def _validate_allgather_matmul_inputs(a: torch.Tensor, b: torch.Tensor, world_si
 
 def allgather_matmul(a: torch.Tensor, b: torch.Tensor, world_size: int) -> torch.Tensor:
     _validate_allgather_matmul_inputs(a, b, world_size)
-    _log_catccos_wrapper_once(
-        "catccos torch op call: a_shape=%s b_shape=%s a_dtype=%s b_dtype=%s "
-        "a_device=%s b_device=%s world_size=%s",
-        _shape(a),
-        _shape(b),
-        a.dtype,
-        b.dtype,
-        a.device,
-        b.device,
-        world_size,
-    )
     output = torch.ops.catccos.allgather_matmul(a, b, world_size)
-    _log_catccos_wrapper_once(
-        "catccos torch op returned: output_shape=%s output_dtype=%s output_device=%s",
-        _shape_or_none(output),
-        getattr(output, "dtype", None),
-        getattr(output, "device", None),
-    )
     return output
