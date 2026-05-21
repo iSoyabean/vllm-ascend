@@ -115,7 +115,7 @@ def _log_catccos_forward_once(message: str, *args) -> None:
     if _catccos_linear_forward_log_count >= _CATCCOS_LINEAR_FORWARD_LOG_LIMIT:
         return
     _catccos_linear_forward_log_count += 1
-    logger.info(message, *args)
+    print(message % args if args else message, flush=True)
 
 
 class CustomLinearOp:
