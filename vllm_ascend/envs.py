@@ -69,6 +69,11 @@ env_variables: dict[str, Callable[[], Any]] = {
     "VLLM_ASCEND_CATCCOS_ALLGATHER_MATMUL_PREFIXES": lambda: os.getenv(
         "VLLM_ASCEND_CATCCOS_ALLGATHER_MATMUL_PREFIXES", ""
     ),
+    # Whether to use catccos matmul_allreduce in selected row-parallel
+    # model forward paths. Requires VLLM_ASCEND_ENABLE_CATCCOS=1.
+    "VLLM_ASCEND_ENABLE_CATCCOS_MATMUL_ALLREDUCE": lambda: bool(
+        int(os.getenv("VLLM_ASCEND_ENABLE_CATCCOS_MATMUL_ALLREDUCE", "0"))
+    ),
     # The version of the Ascend chip. It's used for package building.
     # If not set, we will query chip info through `npu-smi`.
     # Please make sure that the version is correct.

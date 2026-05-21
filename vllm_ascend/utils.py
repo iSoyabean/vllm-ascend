@@ -842,6 +842,13 @@ def catccos_allgather_matmul_prefix_enabled(prefix: str) -> bool:
     return any(item == "*" or item in prefix for item in prefixes)
 
 
+def catccos_matmul_allreduce_enable() -> bool:
+    return bool(
+        envs_ascend.VLLM_ASCEND_ENABLE_CATCCOS
+        and envs_ascend.VLLM_ASCEND_ENABLE_CATCCOS_MATMUL_ALLREDUCE
+    )
+
+
 def matmul_allreduce_enable() -> bool:
     return envs_ascend.VLLM_ASCEND_ENABLE_MATMUL_ALLREDUCE
 

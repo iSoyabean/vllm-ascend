@@ -20,7 +20,6 @@ Current class inheritance structure:
 CustomLinearOp
 ├── CustomColumnParallelOp
 │   ├── MLPColumnParallelOp
-│   ├── CatccosMLPColumnParallelOp
 │   ├── SequenceColumnParallelOp
 │   ├── Flashcomm2OshardQKVParallelOp
 └── CustomRowParallelOp
@@ -71,8 +70,7 @@ from vllm_ascend.distributed.parallel_state import (
 )
 from vllm_ascend.ops.flashcomm2_oshard_manager import flashcomm2_oshard_manager
 from vllm_ascend.utils import (
-    catccos_allgather_matmul_enable,
-    catccos_allgather_matmul_prefix_enabled,
+    catccos_matmul_allreduce_enable,
     enable_dsa_cp,
     enable_dsa_cp_with_layer_shard,
     enable_sp,
@@ -226,38 +224,6 @@ class MLPColumnParallelOp(CustomColumnParallelOp):
         assert self.quant_method is not None
         input_parallel = self.comm_group.all_gather(input_, 0)
         output = self.quant_method.apply(self.layer, input_parallel, bias)
-
-        output_bias = self.bias if self.skip_bias_add else None
-        return output, output_bias
-
-
-class CatccosMLPColumnParallelOp(MLPColumnParallelOp):
-    _SUPPORTED_QUANT_METHODS = {"AscendUnquantizedLinearMethod", "UnquantizedLinearMethod"}
-
-    def _quant_method_name(self) -> str:
-        actual_quant_method = getattr(self.quant_method, "quant_method", self.quant_method)
-        return actual_quant_method.__class__.__name__
-
-    def _is_supported_quant_method(self) -> bool:
-        return self._quant_method_name() in self._SUPPORTED_QUANT_METHODS
-
-    def apply_impl(
-        self,
-        input_: torch.Tensor,
-    ) -> torch.Tensor | tuple[torch.Tensor, Parameter | None]:
-        assert self.quant_method is not None
-        quant_method_name = self._quant_method_name()
-        if not self._is_supported_quant_method():
-            return super().apply_impl(input_)
-
-        from vllm_ascend.ops.catccos import allgather_matmul
-
-        input_contiguous = input_.contiguous()
-        weight_contiguous = self.layer.weight.t().contiguous()
-        bias = self.bias if not self.skip_bias_add else None
-        output = allgather_matmul(input_contiguous, weight_contiguous, self.tp_size)
-        if bias is not None:
-            output = output + bias
 
         output_bias = self.bias if self.skip_bias_add else None
         return output, output_bias
@@ -447,6 +413,7 @@ class Flashcomm2OProjRowParallelOp(CustomRowParallelOp):
 
 class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
     _HCOMM_INFO = None
+    _SUPPORTED_CATCCOS_QUANT_METHODS = {"AscendUnquantizedLinearMethod", "UnquantizedLinearMethod"}
 
     def __init__(self, layer):
         super().__init__(layer)
@@ -458,9 +425,22 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
         fusing communication and computation."""
         bias_ = None if (self.tp_rank > 0 or self.skip_bias_add) else self.bias
         if self.reduce_results and self.tp_size > 1:
-            output = torch_npu.npu_mm_all_reduce_base(
-                input_parallel, self.layer.weight.t(), self.hcomm_info, bias=bias_
-            )
+            actual_quant_method = getattr(self.quant_method, "quant_method", self.quant_method)
+            if (
+                catccos_matmul_allreduce_enable()
+                and actual_quant_method.__class__.__name__ in self._SUPPORTED_CATCCOS_QUANT_METHODS
+                and input_parallel.dtype == torch.float16
+                and self.layer.weight.dtype == torch.float16
+            ):
+                from vllm_ascend.ops.catccos import matmul_allreduce
+
+                output = matmul_allreduce(input_parallel.contiguous(), self.layer.weight.t().contiguous(), self.tp_size)
+                if bias_ is not None:
+                    output = output + bias_
+            else:
+                output = torch_npu.npu_mm_all_reduce_base(
+                    input_parallel, self.layer.weight.t(), self.hcomm_info, bias=bias_
+                )
         else:
             assert self.quant_method is not None
             output = self.quant_method.apply(self.layer, input_parallel, bias=bias_)
@@ -501,47 +481,6 @@ class SequenceColumnParallelOp(CustomColumnParallelOp):
 
         if self.gather_output:
             # All-gather across the partitions.
-            output = self.comm_group.all_gather(output_parallel)
-        else:
-            output = output_parallel
-        output_bias = self.bias if self.skip_bias_add else None
-        return output, output_bias
-
-
-class CatccosSequenceColumnParallelOp(SequenceColumnParallelOp):
-    _SUPPORTED_QUANT_METHODS = {"AscendUnquantizedLinearMethod", "UnquantizedLinearMethod"}
-
-    def _quant_method_name(self) -> str:
-        actual_quant_method = getattr(self.quant_method, "quant_method", self.quant_method)
-        return actual_quant_method.__class__.__name__
-
-    def _is_supported_quant_method(self) -> bool:
-        return self._quant_method_name() in self._SUPPORTED_QUANT_METHODS
-
-    def apply_impl(self, input_: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, Parameter | None]:
-        assert self.quant_method is not None
-        quant_method_name = self._quant_method_name()
-        if not self._is_supported_quant_method():
-            return super().apply_impl(input_)
-
-        need_all_gather = not (extract_layer_index(self.layer.prefix) == 0 and is_vl_model() and "attn" in self.prefix)
-        if not need_all_gather:
-            return super().apply_impl(input_)
-        if not _EXTRA_CTX.flash_comm_v1_enabled:
-            return super().apply_impl(input_)
-        if _EXTRA_CTX.pad_size != 0:
-            return super().apply_impl(input_)
-
-        from vllm_ascend.ops.catccos import allgather_matmul
-
-        input_contiguous = input_.contiguous()
-        weight_contiguous = self.layer.weight.t().contiguous()
-        bias = self.bias if not self.skip_bias_add else None
-        output_parallel = allgather_matmul(input_contiguous, weight_contiguous, self.tp_size)
-        if bias is not None:
-            output_parallel = output_parallel + bias
-
-        if self.gather_output:
             output = self.comm_group.all_gather(output_parallel)
         else:
             output = output_parallel
@@ -732,7 +671,6 @@ def _get_column_parallel_op(
     prefix, layer
 ) -> (
     MLPColumnParallelOp
-    | CatccosMLPColumnParallelOp
     | SequenceColumnParallelOp
     | ShardedCPColumnParallelOp
     | Flashcomm2OshardQKVParallelOp
@@ -741,32 +679,7 @@ def _get_column_parallel_op(
     if enable_dsa_cp() and ("q_b_proj" in prefix or "kv_b_proj" in prefix):
         return ShardedCPColumnParallelOp(layer)
     if "gate_up_proj" in prefix:
-        mlp_tp = mlp_tp_enable()
-        is_moe = is_moe_layer(prefix)
-        catccos_enabled = catccos_allgather_matmul_enable()
-        prefix_enabled = catccos_allgather_matmul_prefix_enabled(prefix) if catccos_enabled else False
-        _log_catccos_selection_once(
-            "catccos gate_up candidate: prefix=%s mlp_tp_enable=%s is_moe_layer=%s "
-            "catccos_enabled=%s prefix_enabled=%s",
-            prefix,
-            mlp_tp,
-            is_moe,
-            catccos_enabled,
-            prefix_enabled,
-        )
-        if mlp_tp and not is_moe:
-            if catccos_enabled and prefix_enabled:
-                _log_catccos_selection_once(
-                    "catccos allgather_matmul custom op selected: prefix=%s",
-                    prefix,
-                )
-                return CatccosMLPColumnParallelOp(layer)
-            _log_catccos_selection_once(
-                "catccos allgather_matmul custom op not selected: prefix=%s enabled=%s prefix_enabled=%s",
-                prefix,
-                catccos_enabled,
-                prefix_enabled,
-            )
+        if mlp_tp_enable() and not is_moe_layer(prefix):
             return MLPColumnParallelOp(layer)
     if flashcomm2_oshard_manager.flashcomm2_oshard_enable():
         if any(p in prefix for p in ("qkv_proj", "conv1d", "query_key_value")):
@@ -783,16 +696,6 @@ def _get_column_parallel_op(
         ]
         for a_prefix in sp_column_prefix:
             if a_prefix in prefix:
-                if (
-                    a_prefix == "gate_up_proj"
-                    and catccos_allgather_matmul_enable()
-                    and catccos_allgather_matmul_prefix_enabled(prefix)
-                ):
-                    _log_catccos_selection_once(
-                        "catccos sequence allgather_matmul custom op selected: prefix=%s",
-                        prefix,
-                    )
-                    return CatccosSequenceColumnParallelOp(layer)
                 return SequenceColumnParallelOp(layer)
 
     return None
@@ -816,6 +719,11 @@ def _get_row_parallel_op(
     if "o_proj" in prefix and oproj_tp_enable():
         return OProjRowParallelOp(layer)
     if matmul_allreduce_enable():
+        _log_catccos_selection_once(
+            "matmul_allreduce row op selected: prefix=%s catccos_enabled=%s",
+            prefix,
+            catccos_matmul_allreduce_enable(),
+        )
         return MatmulAllreduceRowParallelOp(layer)
     if flashcomm2_enable():
         if "o_proj" in prefix or "out_proj" in prefix:
@@ -837,14 +745,6 @@ def _get_row_parallel_op(
 
 
 def get_parallel_op(disable_tp, prefix, layer, direct):
-    if catccos_allgather_matmul_enable():
-        _log_catccos_prefix_scan_once(
-            "catccos prefix scan: direct=%s prefix=%s layer=%s disable_tp=%s",
-            direct,
-            prefix,
-            layer.__class__.__name__,
-            disable_tp,
-        )
     if (
         disable_tp
         or ("shared_experts" in prefix and shared_expert_dp_enabled())
@@ -853,7 +753,6 @@ def get_parallel_op(disable_tp, prefix, layer, direct):
         return None, 0, 1
     custom_op: (
         MLPColumnParallelOp
-        | CatccosMLPColumnParallelOp
         | SequenceColumnParallelOp
         | MLPRowParallelOp
         | OProjRowParallelOp

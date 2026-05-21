@@ -70,3 +70,7 @@ def allgather_matmul(a: torch.Tensor, b: torch.Tensor, world_size: int) -> torch
     _validate_allgather_matmul_inputs(a, b, world_size)
     output = torch.ops.catccos.allgather_matmul(a, b, world_size)
     return output
+
+
+def matmul_allreduce(a: torch.Tensor, b: torch.Tensor, world_size: int) -> torch.Tensor:
+    return torch.ops.catccos.matmul_allreduce(a, b, world_size)
