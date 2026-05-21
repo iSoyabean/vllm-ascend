@@ -517,6 +517,7 @@ class SequenceColumnParallelOp(CustomColumnParallelOp):
         # Matrix multiply.
         assert self.quant_method is not None
         need_all_gather = not (extract_layer_index(self.layer.prefix) == 0 and is_vl_model() and "attn" in self.prefix)
+        input_shape_before_gather = tuple(input_.shape)
         input_ = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(input_, label=need_all_gather)
         output_parallel = self.quant_method.apply(self.layer, input_, bias)
 
@@ -525,6 +526,17 @@ class SequenceColumnParallelOp(CustomColumnParallelOp):
             output = self.comm_group.all_gather(output_parallel)
         else:
             output = output_parallel
+        _log_catccos_forward_once(
+            "sequence column original: prefix=%s need_all_gather=%s input_shape=%s after_gather_shape=%s "
+            "output_parallel_shape=%s gather_output=%s output_shape=%s",
+            self.prefix,
+            need_all_gather,
+            input_shape_before_gather,
+            tuple(input_.shape),
+            tuple(output_parallel.shape),
+            self.gather_output,
+            tuple(output.shape),
+        )
         output_bias = self.bias if self.skip_bias_add else None
         return output, output_bias
 
@@ -595,6 +607,15 @@ class CatccosSequenceColumnParallelOp(SequenceColumnParallelOp):
             output = self.comm_group.all_gather(output_parallel)
         else:
             output = output_parallel
+        _log_catccos_forward_once(
+            "catccos sequence allgather_matmul output: prefix=%s input_shape=%s output_parallel_shape=%s "
+            "gather_output=%s output_shape=%s",
+            self.prefix,
+            tuple(input_contiguous.shape),
+            tuple(output_parallel.shape),
+            self.gather_output,
+            tuple(output.shape),
+        )
         output_bias = self.bias if self.skip_bias_add else None
         return output, output_bias
 
