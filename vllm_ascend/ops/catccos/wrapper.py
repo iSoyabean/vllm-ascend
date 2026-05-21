@@ -1,7 +1,6 @@
 """Public Python wrappers for catccos torch operators."""
 
 import torch
-from vllm.logger import logger
 
 from vllm_ascend.ops.catccos import register as runtime
 
@@ -14,7 +13,7 @@ def _log_catccos_wrapper_once(message: str, *args) -> None:
     if _catccos_wrapper_log_count >= _CATCCOS_WRAPPER_LOG_LIMIT:
         return
     _catccos_wrapper_log_count += 1
-    logger.info(message, *args)
+    print(message % args if args else message, flush=True)
 
 
 def _device_type(tensor: torch.Tensor) -> str | None:
