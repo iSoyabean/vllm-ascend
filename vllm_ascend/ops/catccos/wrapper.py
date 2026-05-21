@@ -9,11 +9,7 @@ _catccos_wrapper_log_count = 0
 
 
 def _log_catccos_wrapper_once(message: str, *args) -> None:
-    global _catccos_wrapper_log_count
-    if _catccos_wrapper_log_count >= _CATCCOS_WRAPPER_LOG_LIMIT:
-        return
-    _catccos_wrapper_log_count += 1
-    print(message % args if args else message, flush=True)
+    return
 
 
 def _device_type(tensor: torch.Tensor) -> str | None:

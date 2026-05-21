@@ -111,11 +111,7 @@ def _log_catccos_selection_once(message: str, *args) -> None:
 
 
 def _log_catccos_forward_once(message: str, *args) -> None:
-    global _catccos_linear_forward_log_count
-    if _catccos_linear_forward_log_count >= _CATCCOS_LINEAR_FORWARD_LOG_LIMIT:
-        return
-    _catccos_linear_forward_log_count += 1
-    print(message % args if args else message, flush=True)
+    return
 
 
 class CustomLinearOp:
