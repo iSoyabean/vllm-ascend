@@ -554,6 +554,14 @@ class CatccosSequenceColumnParallelOp(SequenceColumnParallelOp):
         need_all_gather = not (extract_layer_index(self.layer.prefix) == 0 and is_vl_model() and "attn" in self.prefix)
         if not need_all_gather:
             return super().apply_impl(input_)
+        if not _EXTRA_CTX.flash_comm_v1_enabled:
+            _log_catccos_forward_once(
+                "catccos sequence allgather_matmul fallback: prefix=%s flash_comm_v1_enabled=%s input_shape=%s",
+                self.prefix,
+                _EXTRA_CTX.flash_comm_v1_enabled,
+                tuple(input_.shape),
+            )
+            return super().apply_impl(input_)
         if _EXTRA_CTX.pad_size != 0:
             _log_catccos_forward_once(
                 "catccos sequence allgather_matmul fallback: prefix=%s pad_size=%s input_shape=%s",
