@@ -434,9 +434,34 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
             ):
                 from vllm_ascend.ops.catccos import matmul_allreduce
 
-                output = matmul_allreduce(input_parallel.contiguous(), self.layer.weight.t().contiguous(), self.tp_size)
-                if bias_ is not None:
-                    output = output + bias_
+                cat_out = matmul_allreduce(
+                    input_parallel.contiguous(),
+                    self.layer.weight.t().contiguous(),
+                    self.tp_size,
+                )
+                if self.bias is not None and not self.skip_bias_add:
+                    cat_out = cat_out + self.bias
+
+                ref_out = torch_npu.npu_mm_all_reduce_base(
+                    input_parallel,
+                    self.layer.weight.t(),
+                    self.hcomm_info,
+                    bias=bias_,
+                )
+
+                import sys
+
+                diff = (cat_out - ref_out).abs()
+                row_diff = diff.flatten(1).max(dim=1).values if diff.ndim > 1 else diff
+                sys.stderr.write(
+                    f"[mmar-compare] prefix={self.prefix} "
+                    f"shape={tuple(input_parallel.shape)} "
+                    f"max={diff.max().item():.6f} mean={diff.mean().item():.6f} "
+                    f"row_max0={row_diff[:8].detach().cpu().tolist()}\n"
+                )
+                sys.stderr.flush()
+
+                output = cat_out
             else:
                 output = torch_npu.npu_mm_all_reduce_base(
                     input_parallel, self.layer.weight.t(), self.hcomm_info, bias=bias_
