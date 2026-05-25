@@ -434,11 +434,9 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
             ):
                 from vllm_ascend.ops.catccos import matmul_allreduce
 
-                cat_out = matmul_allreduce(
-                    input_parallel.contiguous(),
-                    self.layer.weight.t().contiguous(),
-                    self.tp_size,
-                )
+                cat_input = input_parallel.contiguous()
+                cat_weight = self.layer.weight.t().contiguous()
+                cat_out = matmul_allreduce(cat_input, cat_weight, self.tp_size)
                 if self.bias is not None and not self.skip_bias_add:
                     cat_out = cat_out + self.bias
 
