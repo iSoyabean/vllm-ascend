@@ -461,7 +461,7 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                 )
                 sys.stderr.flush()
 
-                output = cat_out
+                output = ref_out
             else:
                 output = torch_npu.npu_mm_all_reduce_base(
                     input_parallel, self.layer.weight.t(), self.hcomm_info, bias=bias_
