@@ -438,6 +438,7 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                 cat_weight = self.layer.weight.t().contiguous()
                 cat_out = matmul_allreduce(cat_input, cat_weight, self.tp_size)
                 torch.npu.synchronize()
+                dist.barrier(group=self.comm_group.device_group)
                 if self.bias is not None and not self.skip_bias_add:
                     cat_out = cat_out + self.bias
 
