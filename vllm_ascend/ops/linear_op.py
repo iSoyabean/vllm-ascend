@@ -449,9 +449,16 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                     bias=bias_,
                 )
 
+                manual_ref = torch.matmul(cat_input, cat_weight)
+                dist.all_reduce(manual_ref, group=self.comm_group.device_group)
+                if self.bias is not None and not self.skip_bias_add:
+                    manual_ref = manual_ref + self.bias
+
                 import sys
 
                 diff = (cat_out - ref_out).abs()
+                manual_diff = (manual_ref - ref_out).abs()
+                cat_manual_diff = (cat_out - manual_ref).abs()
                 diff_flat = diff.flatten()
                 max_diff = diff_flat.max()
                 max_diff_value = max_diff.item()
@@ -498,12 +505,16 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                         f"[mmar-compare-anomaly] rank={self.tp_rank} prefix={self.prefix} "
                         f"shape={tuple(input_parallel.shape)} weight_shape={tuple(cat_weight.shape)} "
                         f"max={max_diff_value:.6f} mean={mean_diff_value:.6f} "
+                        f"manual_ref_max={manual_diff.max().item():.6f} "
+                        f"cat_manual_max={cat_manual_diff.max().item():.6f} "
                         f"max_idx=({max_row},{max_col}) "
                         f"cat={cat_out.flatten()[max_flat_idx].item():.6f} "
+                        f"manual={manual_ref.flatten()[max_flat_idx].item():.6f} "
                         f"ref={ref_out.flatten()[max_flat_idx].item():.6f} "
                         f"row_top={row_top} "
                         f"slice_cols=({col_start},{col_end}) "
                         f"cat_slice={cat_slice} ref_slice={ref_slice} diff_slice={diff_slice} "
+                        f"manual_slice={manual_ref[max_row, col_start:col_end].detach().cpu().tolist() if diff.ndim > 1 else manual_ref[col_start:col_end].detach().cpu().tolist()} "
                         f"input_stats(min,max,abs_mean)={input_stats} "
                         f"weight_stats(min,max,abs_mean)={weight_stats} "
                         f"finite(cat,ref)=({cat_finite},{ref_finite})\n"
