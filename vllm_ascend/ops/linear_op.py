@@ -485,6 +485,8 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                 dist.barrier(group=self.comm_group.device_group)
                 if self.bias is not None and not self.skip_bias_add:
                     cat_out = cat_out + self.bias
+                cat_out_snapshot = cat_out.clone()
+                torch.npu.synchronize()
 
                 ref_out = torch_npu.npu_mm_all_reduce_base(
                     input_parallel,
@@ -500,9 +502,10 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
 
                 import sys
 
-                diff = (cat_out - ref_out).abs()
+                cat_post_snapshot_diff = (cat_out - cat_out_snapshot).abs()
+                diff = (cat_out_snapshot - ref_out).abs()
                 manual_diff = (manual_ref - ref_out).abs()
-                cat_manual_diff = (cat_out - manual_ref).abs()
+                cat_manual_diff = (cat_out_snapshot - manual_ref).abs()
                 diff_flat = diff.flatten()
                 max_diff = diff_flat.max()
                 max_diff_value = max_diff.item()
@@ -516,7 +519,7 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                         max_col = max_flat_idx % diff.shape[1]
                         col_start = max(0, max_col - 3)
                         col_end = min(diff.shape[1], max_col + 4)
-                        cat_slice = cat_out[max_row, col_start:col_end].detach().cpu().tolist()
+                        cat_slice = cat_out_snapshot[max_row, col_start:col_end].detach().cpu().tolist()
                         ref_slice = ref_out[max_row, col_start:col_end].detach().cpu().tolist()
                         diff_slice = diff[max_row, col_start:col_end].detach().cpu().tolist()
                     else:
@@ -524,7 +527,7 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                         max_col = 0
                         col_start = max(0, max_flat_idx - 3)
                         col_end = min(diff.shape[0], max_flat_idx + 4)
-                        cat_slice = cat_out[col_start:col_end].detach().cpu().tolist()
+                        cat_slice = cat_out_snapshot[col_start:col_end].detach().cpu().tolist()
                         ref_slice = ref_out[col_start:col_end].detach().cpu().tolist()
                         diff_slice = diff[col_start:col_end].detach().cpu().tolist()
 
@@ -542,14 +545,14 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                         cat_weight.max().item(),
                         cat_weight.abs().float().mean().item(),
                     )
-                    cat_finite = bool(torch.isfinite(cat_out).all().item())
+                    cat_finite = bool(torch.isfinite(cat_out_snapshot).all().item())
                     ref_finite = bool(torch.isfinite(ref_out).all().item())
                     dump_path = _dump_catccos_mmar_anomaly(
                         prefix=self.prefix,
                         rank=self.tp_rank,
                         cat_input=cat_input,
                         cat_weight=cat_weight,
-                        cat_out=cat_out,
+                        cat_out=cat_out_snapshot,
                         ref_out=ref_out,
                         manual_ref=manual_ref,
                         bias=self.bias if self.bias is not None and not self.skip_bias_add else None,
@@ -563,6 +566,7 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                             "mean": mean_diff_value,
                             "manual_ref_max": manual_diff.max().item(),
                             "cat_manual_max": cat_manual_diff.max().item(),
+                            "cat_post_snapshot_max": cat_post_snapshot_diff.max().item(),
                             "max_idx": (max_row, max_col),
                             "row_top": row_top,
                             "input_stats": input_stats,
@@ -576,8 +580,9 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                         f"max={max_diff_value:.6f} mean={mean_diff_value:.6f} "
                         f"manual_ref_max={manual_diff.max().item():.6f} "
                         f"cat_manual_max={cat_manual_diff.max().item():.6f} "
+                        f"cat_post_snapshot_max={cat_post_snapshot_diff.max().item():.6f} "
                         f"max_idx=({max_row},{max_col}) "
-                        f"cat={cat_out.flatten()[max_flat_idx].item():.6f} "
+                        f"cat={cat_out_snapshot.flatten()[max_flat_idx].item():.6f} "
                         f"manual={manual_ref.flatten()[max_flat_idx].item():.6f} "
                         f"ref={ref_out.flatten()[max_flat_idx].item():.6f} "
                         f"row_top={row_top} "
