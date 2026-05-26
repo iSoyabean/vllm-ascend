@@ -452,14 +452,63 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                 import sys
 
                 diff = (cat_out - ref_out).abs()
+                diff_flat = diff.flatten()
+                max_diff = diff_flat.max()
+                max_diff_value = max_diff.item()
+                mean_diff_value = diff.mean().item()
                 row_diff = diff.flatten(1).max(dim=1).values if diff.ndim > 1 else diff
-                sys.stderr.write(
-                    f"[mmar-compare] prefix={self.prefix} "
-                    f"shape={tuple(input_parallel.shape)} "
-                    f"max={diff.max().item():.6f} mean={diff.mean().item():.6f} "
-                    f"row_max0={row_diff[:8].detach().cpu().tolist()}\n"
-                )
-                sys.stderr.flush()
+
+                if max_diff_value > 1e-3:
+                    max_flat_idx = int(diff_flat.argmax().item())
+                    if diff.ndim > 1:
+                        max_row = max_flat_idx // diff.shape[1]
+                        max_col = max_flat_idx % diff.shape[1]
+                        col_start = max(0, max_col - 3)
+                        col_end = min(diff.shape[1], max_col + 4)
+                        cat_slice = cat_out[max_row, col_start:col_end].detach().cpu().tolist()
+                        ref_slice = ref_out[max_row, col_start:col_end].detach().cpu().tolist()
+                        diff_slice = diff[max_row, col_start:col_end].detach().cpu().tolist()
+                    else:
+                        max_row = max_flat_idx
+                        max_col = 0
+                        col_start = max(0, max_flat_idx - 3)
+                        col_end = min(diff.shape[0], max_flat_idx + 4)
+                        cat_slice = cat_out[col_start:col_end].detach().cpu().tolist()
+                        ref_slice = ref_out[col_start:col_end].detach().cpu().tolist()
+                        diff_slice = diff[col_start:col_end].detach().cpu().tolist()
+
+                    topk = min(8, row_diff.numel())
+                    top_row_vals, top_row_idx = torch.topk(row_diff, k=topk)
+                    row_top = list(zip(top_row_idx.detach().cpu().tolist(), top_row_vals.detach().cpu().tolist()))
+
+                    input_stats = (
+                        cat_input.min().item(),
+                        cat_input.max().item(),
+                        cat_input.abs().float().mean().item(),
+                    )
+                    weight_stats = (
+                        cat_weight.min().item(),
+                        cat_weight.max().item(),
+                        cat_weight.abs().float().mean().item(),
+                    )
+                    cat_finite = bool(torch.isfinite(cat_out).all().item())
+                    ref_finite = bool(torch.isfinite(ref_out).all().item())
+
+                    sys.stderr.write(
+                        f"[mmar-compare-anomaly] rank={self.tp_rank} prefix={self.prefix} "
+                        f"shape={tuple(input_parallel.shape)} weight_shape={tuple(cat_weight.shape)} "
+                        f"max={max_diff_value:.6f} mean={mean_diff_value:.6f} "
+                        f"max_idx=({max_row},{max_col}) "
+                        f"cat={cat_out.flatten()[max_flat_idx].item():.6f} "
+                        f"ref={ref_out.flatten()[max_flat_idx].item():.6f} "
+                        f"row_top={row_top} "
+                        f"slice_cols=({col_start},{col_end}) "
+                        f"cat_slice={cat_slice} ref_slice={ref_slice} diff_slice={diff_slice} "
+                        f"input_stats(min,max,abs_mean)={input_stats} "
+                        f"weight_stats(min,max,abs_mean)={weight_stats} "
+                        f"finite(cat,ref)=({cat_finite},{ref_finite})\n"
+                    )
+                    sys.stderr.flush()
 
                 output = ref_out
             else:
