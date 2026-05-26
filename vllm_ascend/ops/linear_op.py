@@ -41,6 +41,8 @@ get_row_parallel_op.
 """
 
 from functools import lru_cache
+import os
+import sys
 from types import SimpleNamespace
 
 import regex as re
@@ -87,9 +89,12 @@ from vllm_ascend.utils import (
 _CATCCOS_LINEAR_PREFIX_SCAN_LOG_LIMIT = 128
 _CATCCOS_LINEAR_SELECTION_LOG_LIMIT = 32
 _CATCCOS_LINEAR_FORWARD_LOG_LIMIT = 32
+_CATCCOS_MMAR_DUMP_LIMIT = int(os.getenv("VLLM_ASCEND_CATCCOS_MMAR_DUMP_LIMIT", "2"))
+_CATCCOS_MMAR_DUMP_DIR = os.getenv("VLLM_ASCEND_CATCCOS_MMAR_DUMP_DIR", "/tmp/vllm_ascend_catccos_mmar")
 _catccos_linear_prefix_scan_log_count = 0
 _catccos_linear_selection_log_count = 0
 _catccos_linear_forward_log_count = 0
+_catccos_mmar_dump_count = 0
 
 
 def _log_catccos_prefix_scan_once(message: str, *args) -> None:
@@ -110,6 +115,45 @@ def _log_catccos_selection_once(message: str, *args) -> None:
 
 def _log_catccos_forward_once(message: str, *args) -> None:
     return
+
+
+def _dump_catccos_mmar_anomaly(
+    *,
+    prefix: str,
+    rank: int,
+    cat_input: torch.Tensor,
+    cat_weight: torch.Tensor,
+    cat_out: torch.Tensor,
+    ref_out: torch.Tensor,
+    manual_ref: torch.Tensor,
+    bias: torch.Tensor | None,
+    metadata: dict,
+) -> str | None:
+    global _catccos_mmar_dump_count
+    if _CATCCOS_MMAR_DUMP_LIMIT <= 0 or _catccos_mmar_dump_count >= _CATCCOS_MMAR_DUMP_LIMIT:
+        return None
+
+    dump_index = _catccos_mmar_dump_count
+    _catccos_mmar_dump_count += 1
+
+    safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", prefix)[:120]
+    os.makedirs(_CATCCOS_MMAR_DUMP_DIR, exist_ok=True)
+    dump_path = os.path.join(
+        _CATCCOS_MMAR_DUMP_DIR,
+        f"mmar_rank{rank}_pid{os.getpid()}_{dump_index}_{safe_prefix}.pt",
+    )
+
+    payload = {
+        "metadata": metadata,
+        "cat_input": cat_input.detach().cpu(),
+        "cat_weight": cat_weight.detach().cpu(),
+        "cat_out": cat_out.detach().cpu(),
+        "ref_out": ref_out.detach().cpu(),
+        "manual_ref": manual_ref.detach().cpu(),
+        "bias": None if bias is None else bias.detach().cpu(),
+    }
+    torch.save(payload, dump_path)
+    return dump_path
 
 
 class CustomLinearOp:
@@ -500,6 +544,31 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                     )
                     cat_finite = bool(torch.isfinite(cat_out).all().item())
                     ref_finite = bool(torch.isfinite(ref_out).all().item())
+                    dump_path = _dump_catccos_mmar_anomaly(
+                        prefix=self.prefix,
+                        rank=self.tp_rank,
+                        cat_input=cat_input,
+                        cat_weight=cat_weight,
+                        cat_out=cat_out,
+                        ref_out=ref_out,
+                        manual_ref=manual_ref,
+                        bias=self.bias if self.bias is not None and not self.skip_bias_add else None,
+                        metadata={
+                            "prefix": self.prefix,
+                            "rank": self.tp_rank,
+                            "tp_size": self.tp_size,
+                            "shape": tuple(input_parallel.shape),
+                            "weight_shape": tuple(cat_weight.shape),
+                            "max": max_diff_value,
+                            "mean": mean_diff_value,
+                            "manual_ref_max": manual_diff.max().item(),
+                            "cat_manual_max": cat_manual_diff.max().item(),
+                            "max_idx": (max_row, max_col),
+                            "row_top": row_top,
+                            "input_stats": input_stats,
+                            "weight_stats": weight_stats,
+                        },
+                    )
 
                     sys.stderr.write(
                         f"[mmar-compare-anomaly] rank={self.tp_rank} prefix={self.prefix} "
@@ -517,7 +586,8 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
                         f"manual_slice={manual_ref[max_row, col_start:col_end].detach().cpu().tolist() if diff.ndim > 1 else manual_ref[col_start:col_end].detach().cpu().tolist()} "
                         f"input_stats(min,max,abs_mean)={input_stats} "
                         f"weight_stats(min,max,abs_mean)={weight_stats} "
-                        f"finite(cat,ref)=({cat_finite},{ref_finite})\n"
+                        f"finite(cat,ref)=({cat_finite},{ref_finite}) "
+                        f"dump_path={dump_path}\n"
                     )
                     sys.stderr.flush()
 
