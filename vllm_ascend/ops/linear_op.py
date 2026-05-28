@@ -41,8 +41,6 @@ get_row_parallel_op.
 """
 
 from functools import lru_cache
-import os
-import sys
 from types import SimpleNamespace
 
 import regex as re
@@ -89,12 +87,9 @@ from vllm_ascend.utils import (
 _CATCCOS_LINEAR_PREFIX_SCAN_LOG_LIMIT = 128
 _CATCCOS_LINEAR_SELECTION_LOG_LIMIT = 32
 _CATCCOS_LINEAR_FORWARD_LOG_LIMIT = 32
-_CATCCOS_MMAR_DUMP_LIMIT = int(os.getenv("VLLM_ASCEND_CATCCOS_MMAR_DUMP_LIMIT", "2"))
-_CATCCOS_MMAR_DUMP_DIR = os.getenv("VLLM_ASCEND_CATCCOS_MMAR_DUMP_DIR", "/tmp/vllm_ascend_catccos_mmar")
 _catccos_linear_prefix_scan_log_count = 0
 _catccos_linear_selection_log_count = 0
 _catccos_linear_forward_log_count = 0
-_catccos_mmar_dump_count = 0
 
 
 def _log_catccos_prefix_scan_once(message: str, *args) -> None:
@@ -115,45 +110,6 @@ def _log_catccos_selection_once(message: str, *args) -> None:
 
 def _log_catccos_forward_once(message: str, *args) -> None:
     return
-
-
-def _dump_catccos_mmar_anomaly(
-    *,
-    prefix: str,
-    rank: int,
-    cat_input: torch.Tensor,
-    cat_weight: torch.Tensor,
-    cat_out: torch.Tensor,
-    ref_out: torch.Tensor,
-    manual_ref: torch.Tensor,
-    bias: torch.Tensor | None,
-    metadata: dict,
-) -> str | None:
-    global _catccos_mmar_dump_count
-    if _CATCCOS_MMAR_DUMP_LIMIT <= 0 or _catccos_mmar_dump_count >= _CATCCOS_MMAR_DUMP_LIMIT:
-        return None
-
-    dump_index = _catccos_mmar_dump_count
-    _catccos_mmar_dump_count += 1
-
-    safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", prefix)[:120]
-    os.makedirs(_CATCCOS_MMAR_DUMP_DIR, exist_ok=True)
-    dump_path = os.path.join(
-        _CATCCOS_MMAR_DUMP_DIR,
-        f"mmar_rank{rank}_pid{os.getpid()}_{dump_index}_{safe_prefix}.pt",
-    )
-
-    payload = {
-        "metadata": metadata,
-        "cat_input": cat_input.detach().cpu(),
-        "cat_weight": cat_weight.detach().cpu(),
-        "cat_out": cat_out.detach().cpu(),
-        "ref_out": ref_out.detach().cpu(),
-        "manual_ref": manual_ref.detach().cpu(),
-        "bias": None if bias is None else bias.detach().cpu(),
-    }
-    torch.save(payload, dump_path)
-    return dump_path
 
 
 class CustomLinearOp:
@@ -480,123 +436,9 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
 
                 cat_input = input_parallel.contiguous()
                 cat_weight = self.layer.weight.t().contiguous()
-                cat_out = matmul_allreduce(cat_input, cat_weight, self.tp_size)
-                torch.npu.synchronize()
-                dist.barrier(group=self.comm_group.device_group)
+                output = matmul_allreduce(cat_input, cat_weight, self.tp_size)
                 if self.bias is not None and not self.skip_bias_add:
-                    cat_out = cat_out + self.bias
-                cat_out_snapshot = cat_out.clone()
-                torch.npu.synchronize()
-
-                ref_out = torch_npu.npu_mm_all_reduce_base(
-                    input_parallel,
-                    self.layer.weight.t(),
-                    self.hcomm_info,
-                    bias=bias_,
-                )
-
-                manual_ref = torch.matmul(cat_input, cat_weight)
-                dist.all_reduce(manual_ref, group=self.comm_group.device_group)
-                if self.bias is not None and not self.skip_bias_add:
-                    manual_ref = manual_ref + self.bias
-
-                import sys
-
-                cat_post_snapshot_diff = (cat_out - cat_out_snapshot).abs()
-                diff = (cat_out_snapshot - ref_out).abs()
-                manual_diff = (manual_ref - ref_out).abs()
-                cat_manual_diff = (cat_out_snapshot - manual_ref).abs()
-                diff_flat = diff.flatten()
-                max_diff = diff_flat.max()
-                max_diff_value = max_diff.item()
-                mean_diff_value = diff.mean().item()
-                row_diff = diff.flatten(1).max(dim=1).values if diff.ndim > 1 else diff
-
-                if max_diff_value > 1e-3:
-                    max_flat_idx = int(diff_flat.argmax().item())
-                    if diff.ndim > 1:
-                        max_row = max_flat_idx // diff.shape[1]
-                        max_col = max_flat_idx % diff.shape[1]
-                        col_start = max(0, max_col - 3)
-                        col_end = min(diff.shape[1], max_col + 4)
-                        cat_slice = cat_out_snapshot[max_row, col_start:col_end].detach().cpu().tolist()
-                        ref_slice = ref_out[max_row, col_start:col_end].detach().cpu().tolist()
-                        diff_slice = diff[max_row, col_start:col_end].detach().cpu().tolist()
-                    else:
-                        max_row = max_flat_idx
-                        max_col = 0
-                        col_start = max(0, max_flat_idx - 3)
-                        col_end = min(diff.shape[0], max_flat_idx + 4)
-                        cat_slice = cat_out_snapshot[col_start:col_end].detach().cpu().tolist()
-                        ref_slice = ref_out[col_start:col_end].detach().cpu().tolist()
-                        diff_slice = diff[col_start:col_end].detach().cpu().tolist()
-
-                    topk = min(8, row_diff.numel())
-                    top_row_vals, top_row_idx = torch.topk(row_diff, k=topk)
-                    row_top = list(zip(top_row_idx.detach().cpu().tolist(), top_row_vals.detach().cpu().tolist()))
-
-                    input_stats = (
-                        cat_input.min().item(),
-                        cat_input.max().item(),
-                        cat_input.abs().float().mean().item(),
-                    )
-                    weight_stats = (
-                        cat_weight.min().item(),
-                        cat_weight.max().item(),
-                        cat_weight.abs().float().mean().item(),
-                    )
-                    cat_finite = bool(torch.isfinite(cat_out_snapshot).all().item())
-                    ref_finite = bool(torch.isfinite(ref_out).all().item())
-                    dump_path = _dump_catccos_mmar_anomaly(
-                        prefix=self.prefix,
-                        rank=self.tp_rank,
-                        cat_input=cat_input,
-                        cat_weight=cat_weight,
-                        cat_out=cat_out_snapshot,
-                        ref_out=ref_out,
-                        manual_ref=manual_ref,
-                        bias=self.bias if self.bias is not None and not self.skip_bias_add else None,
-                        metadata={
-                            "prefix": self.prefix,
-                            "rank": self.tp_rank,
-                            "tp_size": self.tp_size,
-                            "shape": tuple(input_parallel.shape),
-                            "weight_shape": tuple(cat_weight.shape),
-                            "max": max_diff_value,
-                            "mean": mean_diff_value,
-                            "manual_ref_max": manual_diff.max().item(),
-                            "cat_manual_max": cat_manual_diff.max().item(),
-                            "cat_post_snapshot_max": cat_post_snapshot_diff.max().item(),
-                            "max_idx": (max_row, max_col),
-                            "row_top": row_top,
-                            "input_stats": input_stats,
-                            "weight_stats": weight_stats,
-                        },
-                    )
-
-                    sys.stderr.write(
-                        f"[mmar-compare-anomaly] rank={self.tp_rank} prefix={self.prefix} "
-                        f"shape={tuple(input_parallel.shape)} weight_shape={tuple(cat_weight.shape)} "
-                        f"max={max_diff_value:.6f} mean={mean_diff_value:.6f} "
-                        f"manual_ref_max={manual_diff.max().item():.6f} "
-                        f"cat_manual_max={cat_manual_diff.max().item():.6f} "
-                        f"cat_post_snapshot_max={cat_post_snapshot_diff.max().item():.6f} "
-                        f"max_idx=({max_row},{max_col}) "
-                        f"cat={cat_out_snapshot.flatten()[max_flat_idx].item():.6f} "
-                        f"manual={manual_ref.flatten()[max_flat_idx].item():.6f} "
-                        f"ref={ref_out.flatten()[max_flat_idx].item():.6f} "
-                        f"row_top={row_top} "
-                        f"slice_cols=({col_start},{col_end}) "
-                        f"cat_slice={cat_slice} ref_slice={ref_slice} diff_slice={diff_slice} "
-                        f"manual_slice={manual_ref[max_row, col_start:col_end].detach().cpu().tolist() if diff.ndim > 1 else manual_ref[col_start:col_end].detach().cpu().tolist()} "
-                        f"input_stats(min,max,abs_mean)={input_stats} "
-                        f"weight_stats(min,max,abs_mean)={weight_stats} "
-                        f"finite(cat,ref)=({cat_finite},{ref_finite}) "
-                        f"dump_path={dump_path}\n"
-                    )
-                    sys.stderr.flush()
-
-                output = ref_out
+                    output = output + self.bias
             else:
                 output = torch_npu.npu_mm_all_reduce_base(
                     input_parallel, self.layer.weight.t(), self.hcomm_info, bias=bias_
