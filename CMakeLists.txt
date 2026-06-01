@@ -52,6 +52,7 @@ endif()
 
 include(${ASCENDC_CMAKE_DIR}/ascendc.cmake)
 
+
 file(GLOB KERNEL_FILES
 ${CMAKE_CURRENT_SOURCE_DIR}/csrc/kernels/*.cpp)
 
@@ -82,6 +83,7 @@ endif()
 
 message("TORCH_NPU_PATH is ${TORCH_NPU_PATH}")
 
+
 if(SOC_VERSION MATCHES "ascend310p.*")
     file(GLOB VLLM_ASCEND_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/*.cpp
@@ -110,6 +112,8 @@ set(
 )
 
 pybind11_add_module(vllm_ascend_C ${VLLM_ASCEND_SRC})
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/csrc/catccos)
 
 # Detect aclrtMemcpyBatchAsync availability (CANN 8.5+)
 # Can be overridden via VLLM_ASCEND_ENABLE_BATCH_MEMCPY env var (registered
