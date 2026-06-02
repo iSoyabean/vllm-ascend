@@ -16,6 +16,19 @@ endif()
 
 message(STATUS "catccos source detected: ${VLLM_ASCEND_CATCCOS_ROOT}")
 
+set(VLLM_ASCEND_CATCCOS_ASCENDC_INCLUDE_DIRS)
+foreach(_CATCCOS_ASCENDC_INCLUDE_DIR
+    ${ASCEND_HOME_PATH}/aarch64-linux/asc/include
+    ${ASCEND_HOME_PATH}/arm64-linux/asc/include
+    ${ASCEND_HOME_PATH}/${CMAKE_SYSTEM_PROCESSOR}-linux/asc/include
+    ${ASCEND_HOME_PATH}/compiler/tikcpp/tikcfw
+    ${ASCEND_HOME_PATH}/compiler/tikcpp/tikcfw/impl
+    ${ASCEND_HOME_PATH}/compiler/tikcpp/tikcfw/interface)
+  if(EXISTS ${_CATCCOS_ASCENDC_INCLUDE_DIR})
+    list(APPEND VLLM_ASCEND_CATCCOS_ASCENDC_INCLUDE_DIRS ${_CATCCOS_ASCENDC_INCLUDE_DIR})
+  endif()
+endforeach()
+
 set(VLLM_ASCEND_CATCCOS_INCLUDE_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}/..
   ${CMAKE_CURRENT_SOURCE_DIR}
@@ -23,6 +36,7 @@ set(VLLM_ASCEND_CATCCOS_INCLUDE_DIRS
   ${VLLM_ASCEND_CATCCOS_ROOT}/include
   ${VLLM_ASCEND_CATCCOS_ROOT}/3rdparty/shmem/include
   ${VLLM_ASCEND_CATCCOS_ROOT}/3rdparty/shmem/src/device
+  ${VLLM_ASCEND_CATCCOS_ASCENDC_INCLUDE_DIRS}
 )
 
 set(VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS
