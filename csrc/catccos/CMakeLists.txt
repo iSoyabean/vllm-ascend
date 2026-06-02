@@ -19,10 +19,10 @@ message(STATUS "catccos source detected: ${VLLM_ASCEND_CATCCOS_ROOT}")
 set(VLLM_ASCEND_CATCCOS_INCLUDE_DIRS
   ${CMAKE_CURRENT_SOURCE_DIR}/..
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/catlass/include
   ${VLLM_ASCEND_CATCCOS_ROOT}/include
   ${VLLM_ASCEND_CATCCOS_ROOT}/3rdparty/shmem/include
   ${VLLM_ASCEND_CATCCOS_ROOT}/3rdparty/shmem/src/device
-  ${VLLM_ASCEND_CATCCOS_ROOT}/3rdparty/catlass/include
 )
 
 set(VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS
