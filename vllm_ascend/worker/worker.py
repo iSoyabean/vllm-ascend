@@ -53,6 +53,7 @@ from vllm_ascend.batch_invariant import init_batch_invariance
 from vllm_ascend.cpu_binding import bind_cpus
 from vllm_ascend.device_allocator.camem import CaMemAllocator
 from vllm_ascend.distributed.parallel_state import init_ascend_model_parallel
+from vllm_ascend.ops.catccos.runtime import init_catccos_shmem
 from vllm_ascend.ops.triton.triton_utils import init_device_properties_triton
 from vllm_ascend.profiler.torch_npu_profiler import TorchNPUProfilerWrapper
 from vllm_ascend.utils import (
@@ -745,6 +746,7 @@ class NPUWorker(WorkerBase):
         )
         init_ascend_model_parallel(self.parallel_config)
         ensure_ec_transfer_initialized(self.vllm_config)
+        init_catccos_shmem(self.rank, self.parallel_config.world_size)
 
     def get_supported_pooling_tasks(self):
         return self.model_runner.get_supported_pooling_tasks()

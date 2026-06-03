@@ -830,6 +830,17 @@ def matmul_allreduce_enable() -> bool:
     return envs_ascend.VLLM_ASCEND_ENABLE_MATMUL_ALLREDUCE
 
 
+def catccos_enable() -> bool:
+    return envs_ascend.VLLM_ASCEND_ENABLE_CATCCOS
+
+
+def catccos_matmul_allreduce_enable() -> bool:
+    return (
+        envs_ascend.VLLM_ASCEND_ENABLE_CATCCOS
+        and envs_ascend.VLLM_ASCEND_ENABLE_CATCCOS_MATMUL_ALLREDUCE
+    )
+
+
 def enable_sp_by_pass():
     return get_ascend_config().enable_sp_by_pass
 

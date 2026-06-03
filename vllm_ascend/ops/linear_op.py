@@ -69,6 +69,7 @@ from vllm_ascend.distributed.parallel_state import (
 )
 from vllm_ascend.ops.flashcomm2_oshard_manager import flashcomm2_oshard_manager
 from vllm_ascend.utils import (
+    catccos_matmul_allreduce_enable,
     enable_dsa_cp,
     enable_dsa_cp_with_layer_shard,
     enable_sp,
@@ -394,10 +395,14 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
         """Calculate the output tensor of forward by considering
         fusing communication and computation."""
         bias_ = None if (self.tp_rank > 0 or self.skip_bias_add) else self.bias
+        weight = self.layer.weight.t()
         if self.reduce_results and self.tp_size > 1:
-            output = torch_npu.npu_mm_all_reduce_base(
-                input_parallel, self.layer.weight.t(), self.hcomm_info, bias=bias_
-            )
+            if catccos_matmul_allreduce_enable():
+                output = torch.ops._C_ascend.catccos_matmul_allreduce(input_parallel, weight, self.tp_size)
+                if bias_ is not None:
+                    output = output + bias_
+            else:
+                output = torch_npu.npu_mm_all_reduce_base(input_parallel, weight, self.hcomm_info, bias=bias_)
         else:
             assert self.quant_method is not None
             output = self.quant_method.apply(self.layer, input_parallel, bias=bias_)
@@ -668,7 +673,7 @@ def _get_row_parallel_op(
         return MLPRowParallelOp(layer)
     if "o_proj" in prefix and oproj_tp_enable():
         return OProjRowParallelOp(layer)
-    if matmul_allreduce_enable():
+    if matmul_allreduce_enable() or catccos_matmul_allreduce_enable():
         return MatmulAllreduceRowParallelOp(layer)
     if flashcomm2_enable():
         if "o_proj" in prefix or "out_proj" in prefix:

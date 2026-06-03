@@ -69,6 +69,12 @@ env_variables: dict[str, Callable[[], Any]] = {
     # Whether to enable MatmulAllReduce fusion kernel when tensor parallel is enabled.
     # this feature is supported in A2, and eager mode will get better performance.
     "VLLM_ASCEND_ENABLE_MATMUL_ALLREDUCE": lambda: bool(int(os.getenv("VLLM_ASCEND_ENABLE_MATMUL_ALLREDUCE", "0"))),
+    # Whether to enable catccos SHMEM lifecycle for in-tree catccos ops.
+    "VLLM_ASCEND_ENABLE_CATCCOS": lambda: bool(int(os.getenv("VLLM_ASCEND_ENABLE_CATCCOS", "0"))),
+    # Whether to route eligible row-parallel MMAR calls to catccos.
+    "VLLM_ASCEND_ENABLE_CATCCOS_MATMUL_ALLREDUCE": lambda: bool(
+        int(os.getenv("VLLM_ASCEND_ENABLE_CATCCOS_MATMUL_ALLREDUCE", "0"))
+    ),
     # Whether to enable FlashComm optimization when tensor parallel is enabled.
     # This feature will get better performance when concurrency is large.
     "VLLM_ASCEND_ENABLE_FLASHCOMM1": lambda: bool(int(os.getenv("VLLM_ASCEND_ENABLE_FLASHCOMM1", "0"))),
