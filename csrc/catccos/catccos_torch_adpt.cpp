@@ -17,7 +17,9 @@
 namespace vllm_ascend {
 namespace {
 
-constexpr size_t kCatccosSymmetricWorkspaceBytes = 2ULL * 1024 * 1024 * 1024;
+// Match catccos examples/utils/info.h SHMEM_BUFF_BYTES.
+// Keep it below the default 1 GiB SHMEM pool.
+constexpr size_t kCatccosSymmetricWorkspaceBytes = 1004ULL * 1024 * 1024;
 constexpr uint32_t kCatccosMmarBlockDim = 20;
 
 struct CatccosState {
