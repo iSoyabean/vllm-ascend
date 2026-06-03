@@ -133,7 +133,7 @@ void check_mmar_inputs(const at::Tensor& a, const at::Tensor& b, int64_t rank_si
 int64_t catccos_init(int64_t rank_id,
                      int64_t rank_size,
                      int64_t local_mem_size,
-                     c10::string_view ip_port)
+                     const std::string& ip_port)
 {
     auto& runtime = state();
     if (runtime.initialized) {
@@ -152,11 +152,10 @@ int64_t catccos_init(int64_t rank_id,
 
     aclshmemx_uniqueid_t default_flag_uid{};
     aclshmemx_init_attr_t attributes{};
-    const std::string ip_port_str(ip_port.data(), ip_port.size());
     status = set_catccos_init_attr(static_cast<int32_t>(rank_id),
                                    static_cast<int32_t>(rank_size),
                                    static_cast<uint64_t>(local_mem_size),
-                                   ip_port_str.c_str(),
+                                   ip_port.c_str(),
                                    &attributes,
                                    &default_flag_uid);
     TORCH_CHECK(status == ACLSHMEM_SUCCESS,
