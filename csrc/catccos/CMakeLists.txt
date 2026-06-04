@@ -51,7 +51,35 @@ if(DEFINED ENV{SHMEM_HOME_PATH})
   list(APPEND VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS $ENV{SHMEM_HOME_PATH}/shmem/lib)
 endif()
 
-set(VLLM_ASCEND_CATCCOS_SHMEM_LIBS shmem shmem_utils)
+set(VLLM_ASCEND_CATCCOS_SHMEM_LINK_LIBS)
+foreach(_CATCCOS_SHMEM_LIB IN ITEMS shmem shmem_utils)
+  find_library(_CATCCOS_SHMEM_${_CATCCOS_SHMEM_LIB}_LIB
+    NAMES ${_CATCCOS_SHMEM_LIB}
+    PATHS ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS}
+    NO_DEFAULT_PATH
+  )
+  if(NOT _CATCCOS_SHMEM_${_CATCCOS_SHMEM_LIB}_LIB)
+    message(FATAL_ERROR "catccos ${_CATCCOS_SHMEM_LIB} library not found in ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS}")
+  endif()
+  list(APPEND VLLM_ASCEND_CATCCOS_SHMEM_LINK_LIBS
+    ${_CATCCOS_SHMEM_${_CATCCOS_SHMEM_LIB}_LIB}
+  )
+endforeach()
+
+set(VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS)
+foreach(_CATCCOS_SHMEM_LIB_DIR IN LISTS VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS)
+  file(GLOB _CATCCOS_SHMEM_RUNTIME_LIBS_IN_DIR
+    "${_CATCCOS_SHMEM_LIB_DIR}/libshmem.so*"
+    "${_CATCCOS_SHMEM_LIB_DIR}/libshmem_utils.so*"
+  )
+  list(APPEND VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS
+    ${_CATCCOS_SHMEM_RUNTIME_LIBS_IN_DIR}
+  )
+endforeach()
+list(REMOVE_DUPLICATES VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS)
+if(NOT VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS)
+  message(FATAL_ERROR "catccos shmem runtime libraries not found in ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS}")
+endif()
 
 # Device wrapper: compile the catccos MMAR launch wrapper with CCEC/AscendC,
 # following catccos examples instead of appending it to a host C++ target.
@@ -126,10 +154,13 @@ target_link_directories(vllm_ascend_C PRIVATE
 )
 target_link_libraries(vllm_ascend_C PUBLIC
   ${VLLM_ASCEND_CATCCOS_MMAR_KERNEL_SO}
-  ${VLLM_ASCEND_CATCCOS_SHMEM_LIBS}
+  ${VLLM_ASCEND_CATCCOS_SHMEM_LINK_LIBS}
 )
 add_dependencies(vllm_ascend_C catccos_mmar_kernel_build)
 
 install(FILES ${VLLM_ASCEND_CATCCOS_MMAR_KERNEL_SO}
   DESTINATION ${VLLM_ASCEND_INSTALL_PATH}
+)
+install(FILES ${VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS}
+  DESTINATION ${VLLM_ASCEND_INSTALL_PATH}/lib
 )
