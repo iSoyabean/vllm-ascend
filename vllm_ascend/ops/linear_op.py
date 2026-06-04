@@ -40,6 +40,7 @@ Row parallel op follows a similar approach - inherit from RowColumnParallelOp an
 get_row_parallel_op.
 """
 
+import logging
 from functools import lru_cache
 from types import SimpleNamespace
 
@@ -82,6 +83,8 @@ from vllm_ascend.utils import (
     oproj_tp_enable,
     shared_expert_dp_enabled,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CustomLinearOp:
@@ -385,6 +388,7 @@ class Flashcomm2OProjRowParallelOp(CustomRowParallelOp):
 
 class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
     _HCOMM_INFO = None
+    _CATCCOS_LOGGED = False
 
     def __init__(self, layer):
         super().__init__(layer)
@@ -398,6 +402,14 @@ class MatmulAllreduceRowParallelOp(CustomRowParallelOp):
         weight = self.layer.weight.t()
         if self.reduce_results and self.tp_size > 1:
             if catccos_matmul_allreduce_enable():
+                if not MatmulAllreduceRowParallelOp._CATCCOS_LOGGED:
+                    logger.warning(
+                        "Using catccos matmul_allreduce: tp_size=%s, input_shape=%s, weight_shape=%s",
+                        self.tp_size,
+                        tuple(input_parallel.shape),
+                        tuple(weight.shape),
+                    )
+                    MatmulAllreduceRowParallelOp._CATCCOS_LOGGED = True
                 output = torch.ops._C_ascend.catccos_matmul_allreduce(input_parallel, weight, self.tp_size)
                 if bias_ is not None:
                     output = output + bias_
