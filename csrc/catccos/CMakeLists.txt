@@ -64,6 +64,9 @@ set(VLLM_ASCEND_CATCCOS_SHMEM_INSTALL_DIR
 set(VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR
   ${VLLM_ASCEND_CATCCOS_SHMEM_INSTALL_DIR}/lib
 )
+set(VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS
+  ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}
+)
 
 if(NOT EXISTS ${VLLM_ASCEND_CATCCOS_SHMEM_ROOT}/CMakeLists.txt)
   message(FATAL_ERROR "catccos shmem source not found: ${VLLM_ASCEND_CATCCOS_SHMEM_ROOT}")
@@ -155,8 +158,10 @@ list(APPEND VLLM_ASCEND_CATCCOS_KERNEL_INCLUDE_FLAGS
 
 set(VLLM_ASCEND_CATCCOS_KERNEL_LINK_FLAGS
   -L${ASCEND_HOME_PATH}/lib64
-  -L${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}
 )
+foreach(_CATCCOS_SHMEM_LIB_DIR IN LISTS VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS)
+  list(APPEND VLLM_ASCEND_CATCCOS_KERNEL_LINK_FLAGS -L${_CATCCOS_SHMEM_LIB_DIR})
+endforeach()
 
 add_custom_command(
   OUTPUT ${VLLM_ASCEND_CATCCOS_MMAR_KERNEL_SO}
@@ -190,44 +195,23 @@ add_custom_target(catccos_mmar_kernel_build
 )
 add_dependencies(catccos_mmar_kernel_build catccos_shmem_build)
 
-# Host adapter and dispatcher registration live in a separate extension, so
-# importing the base vllm_ascend_C does not load SHMEM unless catccos is used.
-pybind11_add_module(vllm_ascend_catccos_C
-  ${CMAKE_CURRENT_SOURCE_DIR}/catccos_torch_binding.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/catccos_torch_binding_meta.cpp
+# Host adapter: torch/NPU argument checks, SHMEM lifecycle, and OpCommand
+# custom handler entry live in vllm_ascend_C.
+target_sources(vllm_ascend_C PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/catccos_torch_adpt.cpp
 )
-
-target_include_directories(vllm_ascend_catccos_C PRIVATE
+target_include_directories(vllm_ascend_C PRIVATE
   ${VLLM_ASCEND_CATCCOS_INCLUDE_DIRS}
-  ${pybind11_INCLUDE_DIRS}
-  ${PYTHON_INCLUDE_PATH}
-  ${TORCH_INCLUDE_DIRS}
-  ${TORCH_NPU_PATH}/include
-  ${ASCEND_HOME_PATH}/include
 )
-
-target_link_directories(vllm_ascend_catccos_C PRIVATE
-  ${TORCH_LIBRARY_DIRS}
-  ${TORCH_NPU_PATH}/lib/
-  ${ASCEND_HOME_PATH}/lib64
-  ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}
+target_link_directories(vllm_ascend_C PRIVATE
+  ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS}
 )
-
-target_link_libraries(vllm_ascend_catccos_C PUBLIC
+target_link_libraries(vllm_ascend_C PUBLIC
   ${VLLM_ASCEND_CATCCOS_MMAR_KERNEL_SO}
   ${VLLM_ASCEND_CATCCOS_SHMEM_LINK_LIBS}
-  ${VLLM_ASCEND_C_COMMON_LIBS}
 )
+add_dependencies(vllm_ascend_C catccos_mmar_kernel_build catccos_shmem_build)
 
-target_link_options(vllm_ascend_catccos_C PRIVATE
-  "-Wl,-rpath,$ORIGIN:$ORIGIN/lib"
-)
-add_dependencies(vllm_ascend_catccos_C catccos_mmar_kernel_build catccos_shmem_build)
-
-install(TARGETS vllm_ascend_catccos_C
-  DESTINATION ${VLLM_ASCEND_INSTALL_PATH}
-)
 install(FILES ${VLLM_ASCEND_CATCCOS_MMAR_KERNEL_SO}
   DESTINATION ${VLLM_ASCEND_INSTALL_PATH}
 )

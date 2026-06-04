@@ -46,7 +46,7 @@ def init_catccos_shmem(rank: int, world_size: int) -> None:
     if not _catccos_enabled() or _CATCCOS_SHMEM_INITIALIZED:
         return
 
-    import vllm_ascend.vllm_ascend_catccos_C  # noqa: F401
+    import vllm_ascend.vllm_ascend_C  # noqa: F401
 
     ip_port = _get_catccos_shmem_ip_port()
     status = torch.ops._C_ascend.catccos_init(

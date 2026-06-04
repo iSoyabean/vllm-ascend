@@ -46,6 +46,7 @@
 #include "attention/lightning_indexer_quant/lightning_indexer_quant_torch_adpt.h"
 #include "moe/causal_conv1d_v310/causal_conv1d_310_torch_adpt.h"
 #include "attention/recurrent_gated_delta_rule_v310/recurrent_gated_delta_rule_310_torch_adpt.h"
+#include "catccos/catccos_torch_adpt.h"
 #include <c10/core/Device.h>
 #include <c10/core/Scalar.h>
 #include <c10/util/Exception.h>
@@ -1246,6 +1247,14 @@ TORCH_LIBRARY_EXPAND(CONCAT(_C, _ascend), ops)
     ops.def("matmul_allreduce_add_rmsnorm(Tensor x1, Tensor x2, Tensor residual, Tensor gamma, \
         str groupTp, int tpRankSize, int tpRankId, float epsilon, bool isTransB, bool isGatherAddOut) -> (Tensor output, Tensor add_out)");
     ops.impl("matmul_allreduce_add_rmsnorm", torch::kPrivateUse1, &vllm_ascend::matmul_allreduce_add_rmsnorm);
+
+    ops.def("catccos_init(int rank_id, int rank_size, int local_mem_size, str ip_port) -> int");
+    ops.def("catccos_matmul_allreduce(Tensor a, Tensor b, int rank_size) -> Tensor");
+    ops.def("catccos_finalize() -> int");
+
+    ops.impl("catccos_init", &vllm_ascend::catccos_init);
+    ops.impl("catccos_matmul_allreduce", torch::kPrivateUse1, &vllm_ascend::catccos_matmul_allreduce);
+    ops.impl("catccos_finalize", &vllm_ascend::catccos_finalize);
 
     ops.def("get_dispatch_layout(Tensor topk_idx, int num_experts, int "
             "num_ranks) -> (Tensor num_tokens_per_rank, Tensor "

@@ -5,10 +5,10 @@ Usage after building/installing vllm-ascend in the NPU docker::
 
     PYTHONPATH=. python tests/manual/catccos_deep_integration_smoke.py
 
-The default check imports ``vllm_ascend_catccos_C``, verifies that the
-``_C_ascend::catccos_*`` dispatcher schemas are registered, and checks that
-the MMAR Meta implementation returns the expected output shape. It does not
-launch the real MMAR kernel.
+The default check only verifies that ``vllm_ascend_C`` can be imported, the
+``_C_ascend::catccos_*`` dispatcher schemas are registered, and the MMAR Meta
+implementation returns the expected output shape. It does not launch the real
+MMAR kernel.
 
 To additionally verify that an NPU tensor call fails clearly before
 ``catccos_init``::
@@ -23,7 +23,7 @@ import torch
 
 
 def _import_extension() -> None:
-    import vllm_ascend.vllm_ascend_catccos_C  # noqa: F401
+    import vllm_ascend.vllm_ascend_C  # noqa: F401
 
 
 def _require_op(name: str) -> None:

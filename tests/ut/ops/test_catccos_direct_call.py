@@ -18,12 +18,12 @@ def _reset_runtime_state():
 def test_catccos_runtime_disabled_does_not_import_or_init(monkeypatch):
     _reset_runtime_state()
     monkeypatch.setattr(runtime.envs_ascend, "VLLM_ASCEND_ENABLE_CATCCOS", False, raising=False)
-    sys.modules.pop("vllm_ascend.vllm_ascend_catccos_C", None)
+    sys.modules.pop("vllm_ascend.vllm_ascend_C", None)
 
     runtime.init_catccos_shmem(rank=0, world_size=2)
 
     assert not runtime.is_catccos_shmem_initialized()
-    assert "vllm_ascend.vllm_ascend_catccos_C" not in sys.modules
+    assert "vllm_ascend.vllm_ascend_C" not in sys.modules
 
 
 def test_catccos_runtime_calls_registered_ops(monkeypatch):
@@ -42,11 +42,7 @@ def test_catccos_runtime_calls_registered_ops(monkeypatch):
     monkeypatch.setattr(runtime.torch, "ops", SimpleNamespace(_C_ascend=fake_ops))
     monkeypatch.setattr(runtime.envs_ascend, "VLLM_ASCEND_ENABLE_CATCCOS", True, raising=False)
     monkeypatch.setenv("MASTER_ADDR", "10.0.0.8")
-    monkeypatch.setitem(
-        sys.modules,
-        "vllm_ascend.vllm_ascend_catccos_C",
-        ModuleType("vllm_ascend.vllm_ascend_catccos_C"),
-    )
+    monkeypatch.setitem(sys.modules, "vllm_ascend.vllm_ascend_C", ModuleType("vllm_ascend.vllm_ascend_C"))
 
     runtime.init_catccos_shmem(rank=1, world_size=2)
     runtime.init_catccos_shmem(rank=1, world_size=2)
@@ -153,3 +149,4 @@ def test_row_parallel_selection_accepts_catccos_gate(monkeypatch):
     op = linear_op._get_row_parallel_op("self_attn.o_proj", object())
 
     assert isinstance(op, linear_op.MatmulAllreduceRowParallelOp)
+

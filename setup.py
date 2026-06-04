@@ -459,10 +459,6 @@ except LookupError:
 ext_modules = []
 if envs.COMPILE_CUSTOM_KERNELS:
     ext_modules = [CMakeExtension(name="vllm_ascend.vllm_ascend_C")]
-    catccos_root = os.path.join(ROOT_DIR, "csrc", "third_party", "catccos")
-    catccos_supported_soc = "310p" not in envs.SOC_VERSION and not envs.SOC_VERSION.startswith("ascend950")
-    if os.path.exists(catccos_root) and catccos_supported_soc:
-        ext_modules.append(CMakeExtension(name="vllm_ascend.vllm_ascend_catccos_C"))
 
 
 def get_path(*filepath) -> str:

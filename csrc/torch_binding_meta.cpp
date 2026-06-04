@@ -281,6 +281,17 @@ std::tuple<at::Tensor, at::Tensor> matmul_allreduce_add_rmsnorm_meta(
         return {output, add_out};
     }
 
+at::Tensor catccos_matmul_allreduce_meta(const at::Tensor& a,
+                                         const at::Tensor& b,
+                                         int64_t rank_size)
+{
+    (void)rank_size;
+    auto a_sizes = a.sym_sizes();
+    auto b_sizes = b.sym_sizes();
+    std::vector<c10::SymInt> out_shape{a_sizes[0], b_sizes[1]};
+    return at::empty_symint(out_shape, a.options());
+}
+
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> npu_moe_init_routing_custom_meta(
     const at::Tensor &x, const at::Tensor &expert_idx,
     const c10::optional<at::Tensor> &scale, const c10::optional<at::Tensor> &offset, int64_t active_num,
@@ -796,6 +807,8 @@ TORCH_LIBRARY_IMPL_EXPAND(CONCAT(_C, _ascend), Meta, ops) {
     ops.impl("dispatch_ffn_combine", &vllm_ascend::meta::dispatch_ffn_combine_meta);
     // matmul allreduce add rmsnorm
     ops.impl("matmul_allreduce_add_rmsnorm", &vllm_ascend::meta::matmul_allreduce_add_rmsnorm_meta);
+    // catccos MMAR
+    ops.impl("catccos_matmul_allreduce", &vllm_ascend::meta::catccos_matmul_allreduce_meta);
     // moe_init_routing_custom
     ops.impl("npu_moe_init_routing_custom", &vllm_ascend::meta::npu_moe_init_routing_custom_meta);
     // Moe_gating_top_k
