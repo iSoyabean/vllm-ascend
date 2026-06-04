@@ -68,9 +68,10 @@ endforeach()
 
 set(VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS)
 foreach(_CATCCOS_SHMEM_LIB_DIR IN LISTS VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS)
+  # SHMEM loads bootstrap plugins with dlopen at runtime, so install the
+  # complete runtime SO set produced by SHMEM instead of whitelisting names.
   file(GLOB _CATCCOS_SHMEM_RUNTIME_LIBS_IN_DIR
-    "${_CATCCOS_SHMEM_LIB_DIR}/libshmem.so*"
-    "${_CATCCOS_SHMEM_LIB_DIR}/libshmem_utils.so*"
+    "${_CATCCOS_SHMEM_LIB_DIR}/*.so*"
   )
   list(APPEND VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS
     ${_CATCCOS_SHMEM_RUNTIME_LIBS_IN_DIR}
