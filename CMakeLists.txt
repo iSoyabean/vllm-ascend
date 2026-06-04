@@ -113,8 +113,6 @@ set(
 
 pybind11_add_module(vllm_ascend_C ${VLLM_ASCEND_SRC})
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/csrc/catccos)
-
 # Detect aclrtMemcpyBatchAsync availability (CANN 8.5+)
 # Can be overridden via VLLM_ASCEND_ENABLE_BATCH_MEMCPY env var (registered
 # in vllm_ascend/envs.py, forwarded by setup.py as a CMake variable):
@@ -197,6 +195,8 @@ else()
 endif()
 
 target_link_options(vllm_ascend_C PRIVATE "-Wl,-rpath,$ORIGIN:$ORIGIN/lib:$ORIGIN/_cann_ops_custom/vendors/custom_transformer/op_api/lib")
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/csrc/catccos)
 
 if(SOC_VERSION MATCHES "ascend310p.*")
   install(TARGETS vllm_ascend_C DESTINATION ${VLLM_ASCEND_INSTALL_PATH})

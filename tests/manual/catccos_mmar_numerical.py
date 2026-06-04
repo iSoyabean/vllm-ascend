@@ -55,7 +55,7 @@ def main() -> None:
     device = _set_npu_device(local_rank)
     dist.init_process_group(backend="hccl", rank=rank, world_size=world_size)
 
-    import vllm_ascend.vllm_ascend_C  # noqa: F401
+    import vllm_ascend.vllm_ascend_catccos_C  # noqa: F401
 
     init_status = torch.ops._C_ascend.catccos_init(
         rank,
