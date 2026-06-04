@@ -16,6 +16,14 @@ endif()
 
 message(STATUS "catccos source detected: ${VLLM_ASCEND_CATCCOS_ROOT}")
 
+set(VLLM_ASCEND_CATCCOS_CCEC ${ASCEND_HOME_PATH}/tools/bisheng_compiler/bin/bisheng)
+if(NOT EXISTS ${VLLM_ASCEND_CATCCOS_CCEC})
+  set(VLLM_ASCEND_CATCCOS_CCEC ${ASCEND_HOME_PATH}/compiler/bin/bisheng)
+endif()
+if(NOT EXISTS ${VLLM_ASCEND_CATCCOS_CCEC})
+  message(FATAL_ERROR "bisheng compiler not found for catccos build")
+endif()
+
 # catccos/catlass device headers include AscendC headers such as
 # kernel_operator.h. Keep this local to catccos targets and append only paths
 # that exist in the active CANN installation.
@@ -44,57 +52,101 @@ set(VLLM_ASCEND_CATCCOS_INCLUDE_DIRS
   ${VLLM_ASCEND_CATCCOS_ASCENDC_INCLUDE_DIRS}
 )
 
-set(VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS
-  ${VLLM_ASCEND_CATCCOS_ROOT}/3rdparty/shmem/install/shmem/lib
+# Use the SHMEM copy carried by csrc/third_party/catccos. Do not consume
+# SHMEM_HOME_PATH by default: system-level SHMEM may point to another version
+# and make compile/link/runtime drift from the vendored catccos dependency.
+set(VLLM_ASCEND_CATCCOS_SHMEM_ROOT
+  ${VLLM_ASCEND_CATCCOS_ROOT}/3rdparty/shmem
 )
-if(DEFINED ENV{SHMEM_HOME_PATH})
-  list(APPEND VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS $ENV{SHMEM_HOME_PATH}/shmem/lib)
+set(VLLM_ASCEND_CATCCOS_SHMEM_INSTALL_DIR
+  ${VLLM_ASCEND_CATCCOS_SHMEM_ROOT}/install/shmem
+)
+set(VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR
+  ${VLLM_ASCEND_CATCCOS_SHMEM_INSTALL_DIR}/lib
+)
+set(VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS
+  ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}
+)
+
+if(NOT EXISTS ${VLLM_ASCEND_CATCCOS_SHMEM_ROOT}/CMakeLists.txt)
+  message(FATAL_ERROR "catccos shmem source not found: ${VLLM_ASCEND_CATCCOS_SHMEM_ROOT}")
 endif()
 
-set(VLLM_ASCEND_CATCCOS_SHMEM_LINK_LIBS)
-foreach(_CATCCOS_SHMEM_LIB IN ITEMS shmem shmem_utils)
-  find_library(_CATCCOS_SHMEM_${_CATCCOS_SHMEM_LIB}_LIB
-    NAMES ${_CATCCOS_SHMEM_LIB}
-    PATHS ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS}
-    NO_DEFAULT_PATH
-  )
-  if(NOT _CATCCOS_SHMEM_${_CATCCOS_SHMEM_LIB}_LIB)
-    message(FATAL_ERROR "catccos ${_CATCCOS_SHMEM_LIB} library not found in ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS}")
+set(VLLM_ASCEND_CATCCOS_SHMEM_REQUIRED_LIBS
+  ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}/libshmem.so
+  ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}/libshmem_utils.so
+  ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}/aclshmem_bootstrap_config_store.so
+)
+
+set(VLLM_ASCEND_CATCCOS_SHMEM_NEEDS_BUILD FALSE)
+foreach(_CATCCOS_SHMEM_REQUIRED_LIB IN LISTS VLLM_ASCEND_CATCCOS_SHMEM_REQUIRED_LIBS)
+  if(NOT EXISTS ${_CATCCOS_SHMEM_REQUIRED_LIB})
+    set(VLLM_ASCEND_CATCCOS_SHMEM_NEEDS_BUILD TRUE)
   endif()
-  list(APPEND VLLM_ASCEND_CATCCOS_SHMEM_LINK_LIBS
-    ${_CATCCOS_SHMEM_${_CATCCOS_SHMEM_LIB}_LIB}
-  )
 endforeach()
 
-set(VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS)
-foreach(_CATCCOS_SHMEM_LIB_DIR IN LISTS VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS)
-  # SHMEM loads bootstrap plugins with dlopen at runtime, so install the
-  # complete runtime SO set produced by SHMEM instead of whitelisting names.
-  file(GLOB _CATCCOS_SHMEM_RUNTIME_LIBS_IN_DIR
-    "${_CATCCOS_SHMEM_LIB_DIR}/*.so*"
+if(VLLM_ASCEND_CATCCOS_SHMEM_NEEDS_BUILD)
+  set(VLLM_ASCEND_CATCCOS_SHMEM_BUILD_DIR
+    ${CMAKE_BINARY_DIR}/catccos_shmem_build
   )
-  list(APPEND VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS
-    ${_CATCCOS_SHMEM_RUNTIME_LIBS_IN_DIR}
+  set(VLLM_ASCEND_CATCCOS_SHMEM_BUILD_STAMP
+    ${CMAKE_CURRENT_BINARY_DIR}/catccos_shmem_build.stamp
   )
-endforeach()
-list(REMOVE_DUPLICATES VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS)
-if(NOT VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS)
-  message(FATAL_ERROR "catccos shmem runtime libraries not found in ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIRS}")
+  add_custom_command(
+    OUTPUT ${VLLM_ASCEND_CATCCOS_SHMEM_BUILD_STAMP}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${VLLM_ASCEND_CATCCOS_SHMEM_BUILD_DIR}
+    COMMAND ${CMAKE_COMMAND} -E env
+            ASCEND_HOME_PATH=${ASCEND_HOME_PATH}
+            ASCEND_TOOLKIT_HOME=${ASCEND_HOME_PATH}
+            ${CMAKE_COMMAND}
+            -S ${VLLM_ASCEND_CATCCOS_SHMEM_ROOT}
+            -B ${VLLM_ASCEND_CATCCOS_SHMEM_BUILD_DIR}
+            -DCMAKE_INSTALL_PREFIX=${VLLM_ASCEND_CATCCOS_SHMEM_INSTALL_DIR}
+            -DCMAKE_BUILD_TYPE=RELEASE
+            -DCMAKE_C_COMPILER=${VLLM_ASCEND_CATCCOS_CCEC}
+            -DCMAKE_CXX_COMPILER=${VLLM_ASCEND_CATCCOS_CCEC}
+            -DUSE_CXX11_ABI=ON
+            -DUSE_MSSANITIZER=OFF
+            -DSOC_TYPE=${SOC_VERSION}
+            -DPYEXPAND_EXAMPLE=OFF
+    COMMAND ${CMAKE_COMMAND} --build ${VLLM_ASCEND_CATCCOS_SHMEM_BUILD_DIR}
+            --target install --parallel
+    COMMAND ${CMAKE_COMMAND} -E touch ${VLLM_ASCEND_CATCCOS_SHMEM_BUILD_STAMP}
+    BYPRODUCTS ${VLLM_ASCEND_CATCCOS_SHMEM_REQUIRED_LIBS}
+    VERBATIM
+    COMMENT "Building bundled catccos SHMEM"
+  )
+  add_custom_target(catccos_shmem_build
+    DEPENDS ${VLLM_ASCEND_CATCCOS_SHMEM_BUILD_STAMP}
+  )
+else()
+  message(STATUS "catccos bundled SHMEM detected: ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}")
+  add_custom_target(catccos_shmem_build)
 endif()
+
+set(VLLM_ASCEND_CATCCOS_SHMEM_LINK_LIBS
+  shmem
+  shmem_utils
+)
+
+set(VLLM_ASCEND_CATCCOS_SHMEM_INSTALL_CODE
+  "
+  file(GLOB _CATCCOS_SHMEM_RUNTIME_LIBS
+    \"${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}/*.so*\"
+  )
+  if(NOT _CATCCOS_SHMEM_RUNTIME_LIBS)
+    message(FATAL_ERROR \"catccos shmem runtime libraries not found in ${VLLM_ASCEND_CATCCOS_SHMEM_LIB_DIR}\")
+  endif()
+  file(INSTALL DESTINATION \"${VLLM_ASCEND_INSTALL_PATH}/lib\"
+       TYPE FILE FILES \${_CATCCOS_SHMEM_RUNTIME_LIBS})
+  "
+)
 
 # Device wrapper: compile the catccos MMAR launch wrapper with CCEC/AscendC,
 # following catccos examples instead of appending it to a host C++ target.
 set(VLLM_ASCEND_CATCCOS_MMAR_KERNEL_SO
   ${CMAKE_BINARY_DIR}/lib/libcatccos_mmar_kernel.so
 )
-
-set(VLLM_ASCEND_CATCCOS_CCEC ${ASCEND_HOME_PATH}/tools/bisheng_compiler/bin/bisheng)
-if(NOT EXISTS ${VLLM_ASCEND_CATCCOS_CCEC})
-  set(VLLM_ASCEND_CATCCOS_CCEC ${ASCEND_HOME_PATH}/compiler/bin/bisheng)
-endif()
-if(NOT EXISTS ${VLLM_ASCEND_CATCCOS_CCEC})
-  message(FATAL_ERROR "bisheng compiler not found for catccos MMAR kernel build")
-endif()
 
 set(VLLM_ASCEND_CATCCOS_KERNEL_INCLUDE_FLAGS)
 foreach(_CATCCOS_KERNEL_INCLUDE_DIR IN LISTS VLLM_ASCEND_CATCCOS_INCLUDE_DIRS)
@@ -141,6 +193,7 @@ add_custom_command(
 add_custom_target(catccos_mmar_kernel_build
   DEPENDS ${VLLM_ASCEND_CATCCOS_MMAR_KERNEL_SO}
 )
+add_dependencies(catccos_mmar_kernel_build catccos_shmem_build)
 
 # Host adapter: torch/NPU argument checks, SHMEM lifecycle, and OpCommand
 # custom handler entry live in vllm_ascend_C.
@@ -157,11 +210,9 @@ target_link_libraries(vllm_ascend_C PUBLIC
   ${VLLM_ASCEND_CATCCOS_MMAR_KERNEL_SO}
   ${VLLM_ASCEND_CATCCOS_SHMEM_LINK_LIBS}
 )
-add_dependencies(vllm_ascend_C catccos_mmar_kernel_build)
+add_dependencies(vllm_ascend_C catccos_mmar_kernel_build catccos_shmem_build)
 
 install(FILES ${VLLM_ASCEND_CATCCOS_MMAR_KERNEL_SO}
   DESTINATION ${VLLM_ASCEND_INSTALL_PATH}
 )
-install(FILES ${VLLM_ASCEND_CATCCOS_SHMEM_RUNTIME_LIBS}
-  DESTINATION ${VLLM_ASCEND_INSTALL_PATH}/lib
-)
+install(CODE "${VLLM_ASCEND_CATCCOS_SHMEM_INSTALL_CODE}")
